@@ -55,13 +55,15 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	var committedVersionID string
 
 	for index := 0; index < 3; index++ {
-		approvalID, storeErr := repository.StorePlan(ctx, workspaceID, owner.User.ID, "p1", plan, "2026-01-01T00:00:00Z")
+		approvalID, storeErr := repository.StorePlan(ctx, workspaceID, owner.User.ID, "p1", "build", plan, "2026-01-01T00:00:00Z")
 		if storeErr != nil {
 			t.Fatal(storeErr)
 		}
 		if approveErr := service.Approve(ctx, owner.Session.Token, workspaceID, "p1", approvalID); approveErr != nil {
 			t.Fatal(approveErr)
 		}
+		_, changedPromptErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "changed requirement"})
+		assertUsageCode(t, changedPromptErr, "approval_invalid")
 		events, runErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build", Plan: &domain.BuildPlan{}})
 		if runErr != nil {
 			t.Fatal(runErr)
@@ -145,7 +147,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	if err != nil || summary.Used != 13 || summary.Remaining != 2 {
 		t.Fatalf("summary=%+v err=%v", summary, err)
 	}
-	approvalID, err := repository.StorePlan(ctx, workspaceID, owner.User.ID, "p1", plan, "2026-01-01T00:00:00Z")
+	approvalID, err := repository.StorePlan(ctx, workspaceID, owner.User.ID, "p1", "build", plan, "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}

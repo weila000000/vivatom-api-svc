@@ -224,17 +224,17 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	return &usage.Version{ID: versionID, ProjectID: projectID, ParentVersionID: parentVersionID, Prompt: prompt, Snapshot: snapshot, CandidateID: candidateID, SnapshotHash: storedHash, CreatedAt: createdAt}, usage.ResultOK, nil
 }
 
-func (r *UsageRepository) StorePlan(ctx context.Context, workspaceID, accountID, projectID string, plan domain.BuildPlan, createdAt string) (string, error) {
+func (r *UsageRepository) StorePlan(ctx context.Context, workspaceID, accountID, projectID, prompt string, plan domain.BuildPlan, createdAt string) (string, error) {
 	payload, err := json.Marshal(plan)
 	if err != nil {
 		return "", err
 	}
 	var id string
 	err = r.db.QueryRowContext(ctx, `
-		INSERT INTO approved_plans (id,workspace_id,account_id,project_id,plan_json,status,created_at)
-		SELECT 'plan_'||lower(hex(randomblob(16))),?,?,?,?, 'pending', ?
+		INSERT INTO approved_plans (id,workspace_id,account_id,project_id,prompt,plan_json,status,created_at)
+		SELECT 'plan_'||lower(hex(randomblob(16))),?,?,?,?,?, 'pending', ?
 		WHERE EXISTS (SELECT 1 FROM memberships WHERE workspace_id=? AND account_id=?)
-		RETURNING id`, workspaceID, accountID, projectID, string(payload), createdAt, workspaceID, accountID).Scan(&id)
+		RETURNING id`, workspaceID, accountID, projectID, prompt, string(payload), createdAt, workspaceID, accountID).Scan(&id)
 	return id, err
 }
 
@@ -271,7 +271,7 @@ func (r *UsageRepository) ApprovePlan(ctx context.Context, accountID, workspaceI
 	return usage.ResultOK, nil
 }
 
-func (r *UsageRepository) ReserveApproved(ctx context.Context, accountID, workspaceID, projectID, approvalID string, credits int, createdAt string) (string, *domain.BuildPlan, usage.Result, error) {
+func (r *UsageRepository) ReserveApproved(ctx context.Context, accountID, workspaceID, projectID, approvalID, prompt string, credits int, createdAt string) (string, *domain.BuildPlan, usage.Result, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", nil, "", err
@@ -292,7 +292,7 @@ func (r *UsageRepository) ReserveApproved(ctx context.Context, accountID, worksp
 		return "", nil, usage.ResultExhausted, nil
 	}
 	var payload string
-	err = tx.QueryRowContext(ctx, `SELECT plan_json FROM approved_plans WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND status='approved'`, approvalID, workspaceID, accountID, projectID).Scan(&payload)
+	err = tx.QueryRowContext(ctx, `SELECT plan_json FROM approved_plans WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND prompt=? AND status='approved'`, approvalID, workspaceID, accountID, projectID, prompt).Scan(&payload)
 	if err == sql.ErrNoRows {
 		return "", nil, usage.ResultApprovalInvalid, nil
 	}

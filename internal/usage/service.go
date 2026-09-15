@@ -25,14 +25,14 @@ type rejectedCompilation interface {
 }
 type Repository interface {
 	Reserve(context.Context, string, string, string, string, int, string) (string, Result, error)
-	StorePlan(context.Context, string, string, string, domain.BuildPlan, string) (string, error)
+	StorePlan(context.Context, string, string, string, string, domain.BuildPlan, string) (string, error)
 	StoreCandidate(context.Context, string, string, string, string, domain.ProjectSnapshot, string) (string, string, error)
 	CommitCandidate(context.Context, string, string, string, string, string, string, string, string) (*Version, Result, error)
 	LoadCandidate(context.Context, string, string, string, string, string) (*domain.ProjectSnapshot, Result, error)
 	RecordVerification(context.Context, string, string, string, string, string, domain.BuildVerification, string) (*domain.BuildVerification, Result, error)
 	RestageVersion(context.Context, string, string, string, string, string) (*Candidate, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
-	ReserveApproved(context.Context, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
+	ReserveApproved(context.Context, string, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string) error
 	Summary(context.Context, string, string) (Summary, bool, error)
 }
@@ -70,7 +70,7 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 			return nil, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
 		}
 		var storedPlan *domain.BuildPlan
-		usageID, storedPlan, result, err = s.repository.ReserveApproved(ctx, account.ID, workspaceID, request.ProjectID, request.ApprovalID, cost, now)
+		usageID, storedPlan, result, err = s.repository.ReserveApproved(ctx, account.ID, workspaceID, request.ProjectID, request.ApprovalID, request.Prompt, cost, now)
 		request.Plan = storedPlan
 	} else {
 		if request.Validate() != nil {
@@ -101,7 +101,7 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		status := "succeeded"
 		for event := range events {
 			if event.Type == "approval.required" && event.Plan != nil {
-				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
+				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, request.Prompt, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
 				if err != nil {
 					status = "failed"
 					event = domain.AgentEvent{Type: "error", Code: "approval_unavailable", Message: "方案暂时无法保存", Retryable: true}

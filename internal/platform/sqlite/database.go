@@ -150,6 +150,7 @@ func migrate(db *sql.DB) error {
 			workspace_id TEXT NOT NULL,
 			account_id TEXT NOT NULL,
 			project_id TEXT NOT NULL,
+			prompt TEXT NOT NULL,
 			plan_json TEXT NOT NULL,
 			status TEXT NOT NULL CHECK(status IN ('pending','approved','consumed')),
 			created_at TEXT NOT NULL,
@@ -234,7 +235,37 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	return migrateAgentUsageActions(db)
+	if err = migrateAgentUsageActions(db); err != nil {
+		return err
+	}
+	return migrateApprovedPlanPrompts(db)
+}
+
+func migrateApprovedPlanPrompts(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(approved_plans)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "prompt" {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE approved_plans ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func migrateAgentUsageActions(db *sql.DB) error {
