@@ -31,6 +31,8 @@ OpenAI-compatible Provider 默认连接 `https://vibe.linux008.com/v1`。在 `.e
 docker compose up --build
 ```
 
+Build Worker 向标准输出写入 JSON 日志。启动、请求、Snapshot 元数据、Vite 子进程输出、编译耗时、拒绝原因、临时目录清理和优雅退出使用同一个 `requestId` 关联；源码与认证 Token 不会写入日志。
+
 ## Verification
 
 ```bash
