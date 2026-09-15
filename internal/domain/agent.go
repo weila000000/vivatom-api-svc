@@ -68,6 +68,12 @@ type ProjectSnapshot struct {
 	Backend      BackendSpec       `json:"backend"`
 }
 
+type BuildVerification struct {
+	Toolchain  string `json:"toolchain"`
+	DurationMS int64  `json:"durationMs"`
+	VerifiedAt string `json:"verifiedAt,omitempty"`
+}
+
 type AgentRequest struct {
 	Action     AgentAction      `json:"action"`
 	ProjectID  string           `json:"projectId"`

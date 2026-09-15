@@ -16,12 +16,14 @@ import (
 
 type acceptingCompiler struct{}
 
-func (acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) error { return nil }
+func (acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
+	return domain.BuildVerification{Toolchain: "test-compiler", DurationMS: 10}, nil
+}
 
 type rejectingCompiler struct{}
 
-func (rejectingCompiler) Compile(context.Context, domain.ProjectSnapshot) error {
-	return rejectedCompileError{}
+func (rejectingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
+	return domain.BuildVerification{}, rejectedCompileError{}
 }
 
 type rejectedCompileError struct{}
@@ -75,8 +77,13 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 		}
 		if index == 0 {
 			version, commitErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
-			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash {
+			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.Build == nil || version.Build.Toolchain != "test-compiler" {
 				t.Fatalf("commit candidate: version=%+v err=%v", version, commitErr)
+			}
+			var toolchain, verifiedAt string
+			var durationMS int64
+			if err = database.QueryRow(`SELECT toolchain,duration_ms,verified_at FROM build_verifications WHERE candidate_id=? AND snapshot_hash=?`, candidateID, snapshotHash).Scan(&toolchain, &durationMS, &verifiedAt); err != nil || toolchain != "test-compiler" || durationMS != 10 || verifiedAt == "" {
+				t.Fatalf("verification was not persisted: toolchain=%q duration=%d verifiedAt=%q err=%v", toolchain, durationMS, verifiedAt, err)
 			}
 			retried, retryErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
 			if retryErr != nil || retried.ID != version.ID {

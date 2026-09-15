@@ -9,6 +9,7 @@ const token = process.env.VIVATOM_BUILDER_TOKEN || "vivatom-local-builder"
 const maxBodyBytes = 2.25 * 1024 * 1024
 const maxOutputBytes = 64 * 1024
 const timeoutMs = 45_000
+const toolchain = "vite@7.3.6+vue@3.5.42"
 const workerRoot = dirname(new URL(import.meta.url).pathname)
 
 function safePath(path) {
@@ -86,8 +87,10 @@ createServer(async (request, response) => {
   }
   try {
     const body = await readJSON(request)
+    const startedAt = Date.now()
     await compile(body.snapshot)
-    response.writeHead(204).end()
+    const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt } })
+    response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
   } catch (error) {
     process.stderr.write(`${new Date().toISOString()} compile_failed ${String(error).slice(0, 4000)}\n`)
     response.writeHead(422, { "Content-Type": "application/json" }).end('{"error":"compile_failed"}')

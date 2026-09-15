@@ -17,7 +17,7 @@ type Runner interface {
 	Run(context.Context, domain.AgentRequest) (<-chan domain.AgentEvent, error)
 }
 type Compiler interface {
-	Compile(context.Context, domain.ProjectSnapshot) error
+	Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error)
 }
 
 type rejectedCompilation interface {
@@ -29,6 +29,7 @@ type Repository interface {
 	StoreCandidate(context.Context, string, string, string, string, domain.ProjectSnapshot, string) (string, string, error)
 	CommitCandidate(context.Context, string, string, string, string, string, string, string, string) (*Version, Result, error)
 	LoadCandidate(context.Context, string, string, string, string, string) (*domain.ProjectSnapshot, Result, error)
+	RecordVerification(context.Context, string, string, string, string, string, domain.BuildVerification, string) (*domain.BuildVerification, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string) error
@@ -172,11 +173,19 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	if s.compiler == nil {
 		return Version{}, &Error{Code: "compiler_unavailable", Status: http.StatusServiceUnavailable}
 	}
-	if err = s.compiler.Compile(ctx, *snapshot); err != nil {
+	verification, err := s.compiler.Compile(ctx, *snapshot)
+	if err != nil {
 		if rejected, ok := err.(rejectedCompilation); ok && rejected.CompileRejected() {
 			return Version{}, &Error{Code: "compile_failed", Status: http.StatusUnprocessableEntity}
 		}
 		return Version{}, &Error{Code: "compiler_unavailable", Status: http.StatusServiceUnavailable}
+	}
+	storedVerification, result, err := s.repository.RecordVerification(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, verification, s.now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return Version{}, unavailable()
+	}
+	if result == ResultCandidateInvalid || storedVerification == nil {
+		return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
 	}
 	version, result, err := s.repository.CommitCandidate(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, s.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
@@ -188,6 +197,7 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	if result == ResultCandidateInvalid || version == nil {
 		return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
 	}
+	version.Build = storedVerification
 	return *version, nil
 }
 

@@ -56,6 +56,29 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 	return &snapshot, usage.ResultOK, nil
 }
 
+func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string, verification domain.BuildVerification, verifiedAt string) (*domain.BuildVerification, usage.Result, error) {
+	result, err := r.db.ExecContext(ctx, `
+		INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,verified_at)
+		SELECT id,?,?,?,? FROM build_candidates
+		WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status IN ('pending','committed')
+		ON CONFLICT(candidate_id) DO NOTHING`, snapshotHash, verification.Toolchain, verification.DurationMS, verifiedAt, candidateID, workspaceID, accountID, projectID, snapshotHash)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err = result.RowsAffected(); err != nil {
+		return nil, "", err
+	}
+	var stored domain.BuildVerification
+	err = r.db.QueryRowContext(ctx, `SELECT toolchain,duration_ms,verified_at FROM build_verifications WHERE candidate_id=? AND snapshot_hash=?`, candidateID, snapshotHash).Scan(&stored.Toolchain, &stored.DurationMS, &stored.VerifiedAt)
+	if err == sql.ErrNoRows {
+		return nil, usage.ResultCandidateInvalid, nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return &stored, usage.ResultOK, nil
+}
+
 func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, createdAt string) (*usage.Version, usage.Result, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -70,7 +93,7 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 		return nil, usage.ResultForbidden, nil
 	}
 	var snapshotJSON, storedHash string
-	err = tx.QueryRowContext(ctx, `SELECT snapshot_json,snapshot_hash FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, candidateID, workspaceID, accountID, projectID).Scan(&snapshotJSON, &storedHash)
+	err = tx.QueryRowContext(ctx, `SELECT c.snapshot_json,c.snapshot_hash FROM build_candidates c JOIN build_verifications v ON v.candidate_id=c.id AND v.snapshot_hash=c.snapshot_hash WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.status='pending'`, candidateID, workspaceID, accountID, projectID).Scan(&snapshotJSON, &storedHash)
 	if err == sql.ErrNoRows {
 		var existing usage.Version
 		err = tx.QueryRowContext(ctx, `SELECT id,project_id,coalesce(parent_version_id,''),prompt,snapshot_json,candidate_id,snapshot_hash,created_at FROM immutable_versions WHERE candidate_id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND coalesce(parent_version_id,'')=? AND prompt=?`, candidateID, workspaceID, accountID, projectID, snapshotHash, parentVersionID, prompt).Scan(&existing.ID, &existing.ProjectID, &existing.ParentVersionID, &existing.Prompt, &snapshotJSON, &existing.CandidateID, &existing.SnapshotHash, &existing.CreatedAt)

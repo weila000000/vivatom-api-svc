@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,12 +19,17 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 			writer.WriteHeader(http.StatusNotFound)
 			return
 		}
-		writer.WriteHeader(http.StatusNoContent)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"data":{"toolchain":"vite@7.3.6+vue@3.5.42","durationMs":120}}`)
 	}))
 	defer server.Close()
 	client := NewClient(server.URL, "builder-secret", time.Second)
-	if err := client.Compile(context.Background(), domain.ProjectSnapshot{}); err != nil {
+	verification, err := client.Compile(context.Background(), domain.ProjectSnapshot{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if verification.Toolchain != "vite@7.3.6+vue@3.5.42" || verification.DurationMS != 120 {
+		t.Fatalf("verification = %+v", verification)
 	}
 	if receivedToken != "builder-secret" {
 		t.Fatalf("builder token = %q", receivedToken)
@@ -33,7 +39,7 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 		writer.WriteHeader(http.StatusUnprocessableEntity)
 	}))
 	defer failed.Close()
-	if err := NewClient(failed.URL, "secret", time.Second).Compile(context.Background(), domain.ProjectSnapshot{}); err == nil {
+	if _, err := NewClient(failed.URL, "secret", time.Second).Compile(context.Background(), domain.ProjectSnapshot{}); err == nil {
 		t.Fatal("expected compiler failure")
 	}
 }

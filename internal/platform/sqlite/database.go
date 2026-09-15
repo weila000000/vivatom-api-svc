@@ -174,6 +174,14 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY(account_id) REFERENCES tenant_accounts(id)
 		);
 		CREATE INDEX IF NOT EXISTS build_candidates_project ON build_candidates(workspace_id, project_id, created_at DESC);
+		CREATE TABLE IF NOT EXISTS build_verifications (
+			candidate_id TEXT PRIMARY KEY,
+			snapshot_hash TEXT NOT NULL,
+			toolchain TEXT NOT NULL,
+			duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+			verified_at TEXT NOT NULL,
+			FOREIGN KEY(candidate_id) REFERENCES build_candidates(id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS immutable_versions (
 			id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,
