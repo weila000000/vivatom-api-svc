@@ -20,6 +20,9 @@ type Config struct {
 	AuthRateLimit   int
 	AgentRateLimit  int
 	RateLimitWindow time.Duration
+	BuilderURL      string
+	BuilderToken    string
+	BuilderTimeout  time.Duration
 }
 
 func FromEnv() (Config, error) {
@@ -35,6 +38,9 @@ func FromEnv() (Config, error) {
 		AuthRateLimit:   20,
 		AgentRateLimit:  10,
 		RateLimitWindow: time.Minute,
+		BuilderURL:      value("VIVATOM_BUILDER_URL", "http://localhost:8090"),
+		BuilderToken:    value("VIVATOM_BUILDER_TOKEN", "vivatom-local-builder"),
+		BuilderTimeout:  50 * time.Second,
 	}
 	var err error
 	if config.ReadTimeout, err = duration("VIVATOM_HTTP_READ_TIMEOUT", config.ReadTimeout); err != nil {
@@ -50,6 +56,9 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	if config.RateLimitWindow, err = duration("VIVATOM_RATE_LIMIT_WINDOW", config.RateLimitWindow); err != nil {
+		return Config{}, err
+	}
+	if config.BuilderTimeout, err = duration("VIVATOM_BUILDER_TIMEOUT", config.BuilderTimeout); err != nil {
 		return Config{}, err
 	}
 	if config.AuthRateLimit, err = positiveInt("VIVATOM_AUTH_RATE_LIMIT", config.AuthRateLimit); err != nil {

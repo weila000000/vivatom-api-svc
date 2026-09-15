@@ -16,11 +16,19 @@ type Identity interface {
 type Runner interface {
 	Run(context.Context, domain.AgentRequest) (<-chan domain.AgentEvent, error)
 }
+type Compiler interface {
+	Compile(context.Context, domain.ProjectSnapshot) error
+}
+
+type rejectedCompilation interface {
+	CompileRejected() bool
+}
 type Repository interface {
 	Reserve(context.Context, string, string, string, string, int, string) (string, Result, error)
 	StorePlan(context.Context, string, string, string, domain.BuildPlan, string) (string, error)
 	StoreCandidate(context.Context, string, string, string, string, domain.ProjectSnapshot, string) (string, string, error)
 	CommitCandidate(context.Context, string, string, string, string, string, string, string, string) (*Version, Result, error)
+	LoadCandidate(context.Context, string, string, string, string, string) (*domain.ProjectSnapshot, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string) error
@@ -31,11 +39,16 @@ type Service struct {
 	identity   Identity
 	runner     Runner
 	repository Repository
+	compiler   Compiler
 	now        func() time.Time
 }
 
-func NewService(identityService Identity, runner Runner, repository Repository) *Service {
-	return &Service{identity: identityService, runner: runner, repository: repository, now: time.Now}
+func NewService(identityService Identity, runner Runner, repository Repository, compiler ...Compiler) *Service {
+	service := &Service{identity: identityService, runner: runner, repository: repository, now: time.Now}
+	if len(compiler) > 0 {
+		service.compiler = compiler[0]
+	}
+	return service
 }
 
 func (s *Service) Run(ctx context.Context, token, workspaceID string, request domain.AgentRequest) (<-chan domain.AgentEvent, error) {
@@ -145,6 +158,25 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	}
 	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(candidateID) == "" || len(snapshotHash) != 64 || strings.TrimSpace(prompt) == "" || len([]rune(prompt)) > 20000 {
 		return Version{}, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
+	}
+	snapshot, result, err := s.repository.LoadCandidate(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash)
+	if err != nil {
+		return Version{}, unavailable()
+	}
+	if result == ResultForbidden {
+		return Version{}, &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
+	}
+	if result == ResultCandidateInvalid || snapshot == nil {
+		return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
+	}
+	if s.compiler == nil {
+		return Version{}, &Error{Code: "compiler_unavailable", Status: http.StatusServiceUnavailable}
+	}
+	if err = s.compiler.Compile(ctx, *snapshot); err != nil {
+		if rejected, ok := err.(rejectedCompilation); ok && rejected.CompileRejected() {
+			return Version{}, &Error{Code: "compile_failed", Status: http.StatusUnprocessableEntity}
+		}
+		return Version{}, &Error{Code: "compiler_unavailable", Status: http.StatusServiceUnavailable}
 	}
 	version, result, err := s.repository.CommitCandidate(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, s.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {

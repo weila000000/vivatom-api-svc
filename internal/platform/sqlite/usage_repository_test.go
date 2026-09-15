@@ -14,6 +14,21 @@ import (
 	"vivatom-api-svc/internal/usage"
 )
 
+type acceptingCompiler struct{}
+
+func (acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) error { return nil }
+
+type rejectingCompiler struct{}
+
+func (rejectingCompiler) Compile(context.Context, domain.ProjectSnapshot) error {
+	return rejectedCompileError{}
+}
+
+type rejectedCompileError struct{}
+
+func (rejectedCompileError) Error() string         { return "compile failed" }
+func (rejectedCompileError) CompileRejected() bool { return true }
+
 func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	database, err := Open(":memory:")
 	if err != nil {
@@ -26,7 +41,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	other, _ := identityService.Register(ctx, identity.Registration{Email: "usage-other@example.com", Password: "password-two", Name: "Other", WorkspaceName: "Other"})
 	provider := &ai.FakeProvider{}
 	repository := NewUsageRepository(database)
-	service := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository)
+	service := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, acceptingCompiler{})
 	workspaceID := owner.Workspaces[0].ID
 	plan, err := provider.Plan(ctx, "build")
 	if err != nil {
@@ -71,6 +86,19 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			assertUsageCode(t, changedErr, "candidate_invalid")
 			_, reuseErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build"})
 			assertUsageCode(t, reuseErr, "approval_invalid")
+		}
+		if index == 1 {
+			rejectingService := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, rejectingCompiler{})
+			_, compileErr := rejectingService.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
+			assertUsageCode(t, compileErr, "compile_failed")
+			var candidateStatus string
+			var versionCount int
+			if err = database.QueryRow(`SELECT status FROM build_candidates WHERE id=?`, candidateID).Scan(&candidateStatus); err != nil || candidateStatus != "pending" {
+				t.Fatalf("failed build changed candidate: status=%q err=%v", candidateStatus, err)
+			}
+			if err = database.QueryRow(`SELECT count(*) FROM immutable_versions WHERE candidate_id=?`, candidateID).Scan(&versionCount); err != nil || versionCount != 0 {
+				t.Fatalf("failed build created version: count=%d err=%v", versionCount, err)
+			}
 		}
 	}
 	events, err := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "p1", Prompt: "plan"})

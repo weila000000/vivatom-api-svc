@@ -1,0 +1,49 @@
+services:
+  builder:
+    build: ./build-worker
+    restart: unless-stopped
+    environment:
+      VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:-vivatom-local-builder}
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    mem_limit: 512m
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - build
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      VIVATOM_HTTP_ADDRESS: :8080
+      VIVATOM_RUNTIME_DATABASE_PATH: /app/data/vivatom.db
+      VIVATOM_BUILDER_URL: http://builder:8090
+      VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:-vivatom-local-builder}
+    volumes:
+      - vivatom-data:/app/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      builder:
+        condition: service_healthy
+    networks:
+      - default
+      - build
+
+volumes:
+  vivatom-data:
+
+networks:
+  build:
+    internal: true

@@ -33,6 +33,29 @@ func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accou
 	return id, snapshotHash, err
 }
 
+func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string) (*domain.ProjectSnapshot, usage.Result, error) {
+	var member int
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
+		return nil, "", err
+	}
+	if member == 0 {
+		return nil, usage.ResultForbidden, nil
+	}
+	var payload string
+	err := r.db.QueryRowContext(ctx, `SELECT snapshot_json FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil, usage.ResultCandidateInvalid, nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	var snapshot domain.ProjectSnapshot
+	if err = json.Unmarshal([]byte(payload), &snapshot); err != nil {
+		return nil, "", err
+	}
+	return &snapshot, usage.ResultOK, nil
+}
+
 func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, createdAt string) (*usage.Version, usage.Result, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

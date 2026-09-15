@@ -15,6 +15,7 @@ import (
 	"vivatom-api-svc/internal/appconfig"
 	"vivatom-api-svc/internal/audit"
 	"vivatom-api-svc/internal/catalog"
+	"vivatom-api-svc/internal/compiler"
 	"vivatom-api-svc/internal/generation"
 	"vivatom-api-svc/internal/httpapi"
 	"vivatom-api-svc/internal/identity"
@@ -49,7 +50,8 @@ func main() {
 	catalogService := catalog.NewService(identityService, sqlite.NewCatalogRepository(database))
 	teamService := team.NewService(identityService, sqlite.NewTeamRepository(database))
 	auditService := audit.NewService(identityService, sqlite.NewAuditRepository(database))
-	usageService := usage.NewService(identityService, orchestrator, sqlite.NewUsageRepository(database))
+	buildCompiler := compiler.NewClient(config.BuilderURL, config.BuilderToken, config.BuilderTimeout)
+	usageService := usage.NewService(identityService, orchestrator, sqlite.NewUsageRepository(database), buildCompiler)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		Ready:           sqlite.ReadyCheck(database),
 		AgentRunner:     usageService,
