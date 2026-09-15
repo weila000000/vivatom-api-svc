@@ -95,15 +95,21 @@ func (o *Orchestrator) runPlan(ctx context.Context, request domain.AgentRequest,
 		o.sendProviderFailure(ctx, send, err)
 		return
 	}
+	if !send(domain.AgentEvent{Type: "action.status", ID: "scope", Agent: "mike", Action: "scope_requirements", Status: "completed", Label: "需求已梳理"}) ||
+		!send(domain.AgentEvent{Type: "agent.completed", Agent: "mike", Message: "产品需求已经结构化。"}) ||
+		!send(domain.AgentEvent{Type: "agent.started", Agent: "ava", Message: "正在审查方案的工程可行性"}) ||
+		!send(domain.AgentEvent{Type: "action.status", ID: "plan-contract", Agent: "ava", Action: "validate_plan", Status: "running", Label: "校验页面、文件和数据契约"}) {
+		return
+	}
 	if err = domain.ValidateBuildPlan(plan); err != nil {
 		o.sendFailure(ctx, send, "plan_rejected", "生成的方案不符合可执行契约，请重新规划。")
 		return
 	}
 	if !send(domain.AgentEvent{
-		Type: "action.status", ID: "scope", Agent: "mike",
-		Action: "scope_requirements", Status: "completed", Label: "需求已梳理",
+		Type: "action.status", ID: "plan-contract", Agent: "ava",
+		Action: "validate_plan", Status: "completed", Label: "工程方案已通过契约检查",
 	}) || !send(domain.AgentEvent{
-		Type: "agent.completed", Agent: "mike",
+		Type: "agent.completed", Agent: "ava",
 		Message: "产品方案已经准备好，请确认后再开始构建。",
 	}) || !send(domain.AgentEvent{Type: "approval.required", Plan: &plan}) {
 		return
@@ -113,13 +119,18 @@ func (o *Orchestrator) runPlan(ctx context.Context, request domain.AgentRequest,
 
 func (o *Orchestrator) runBuild(ctx context.Context, request domain.AgentRequest, send emitter) {
 	if !send(domain.AgentEvent{
-		Type: "agent.started", Agent: "bob", Message: "正在根据已批准方案生成源码",
+		Type: "agent.started", Agent: "ava", Message: "正在读取已批准的工程方案",
 	}) || !send(domain.AgentEvent{
-		Type: "action.status", ID: "generate", Agent: "bob",
-		Action: "generate_artifact", Status: "running", Label: "生成完整源码快照",
+		Type: "action.status", ID: "build-contract", Agent: "ava",
+		Action: "prepare_build", Status: "completed", Label: "构建边界已锁定",
 	}) || !send(domain.AgentEvent{
-		Type: "agent.output", ID: "build-output", Agent: "bob",
-		Text: "正在创建入口、页面组件和基础样式。",
+		Type: "agent.started", Agent: "bob", Message: "正在实现 Vue 页面、组件和交互",
+	}) || !send(domain.AgentEvent{
+		Type: "action.status", ID: "frontend", Agent: "bob", Action: "generate_frontend", Status: "running", Label: "生成前端源码",
+	}) || !send(domain.AgentEvent{
+		Type: "agent.started", Agent: "lin", Message: "正在实现认证和数据模型",
+	}) || !send(domain.AgentEvent{
+		Type: "action.status", ID: "backend", Agent: "lin", Action: "generate_backend", Status: "running", Label: "生成 Runtime 数据契约",
 	}) {
 		return
 	}
@@ -127,6 +138,12 @@ func (o *Orchestrator) runBuild(ctx context.Context, request domain.AgentRequest
 	snapshot, err := o.provider.Build(ctx, request.Prompt, *request.Plan)
 	if err != nil {
 		o.sendProviderFailure(ctx, send, err)
+		return
+	}
+	if !send(domain.AgentEvent{Type: "action.status", ID: "frontend", Agent: "bob", Action: "generate_frontend", Status: "completed", Label: "前端源码已生成"}) ||
+		!send(domain.AgentEvent{Type: "action.status", ID: "backend", Agent: "lin", Action: "generate_backend", Status: "completed", Label: "Runtime 数据契约已生成"}) ||
+		!send(domain.AgentEvent{Type: "agent.started", Agent: "sam", Message: "正在审查源码完整性和安全边界"}) ||
+		!send(domain.AgentEvent{Type: "action.status", ID: "review", Agent: "sam", Action: "review_snapshot", Status: "running", Label: "执行源码契约检查"}) {
 		return
 	}
 	if err = domain.ValidateBuildContract(*request.Plan, snapshot); err != nil {
@@ -139,10 +156,10 @@ func (o *Orchestrator) runBuild(ctx context.Context, request domain.AgentRequest
 		return
 	}
 	if !send(domain.AgentEvent{
-		Type: "action.status", ID: "generate", Agent: "bob",
-		Action: "generate_artifact", Status: "completed", Label: "候选源码已生成",
+		Type: "action.status", ID: "review", Agent: "sam",
+		Action: "review_snapshot", Status: "completed", Label: "源码契约与安全检查通过",
 	}) || !send(domain.AgentEvent{
-		Type: "agent.completed", Agent: "bob",
+		Type: "agent.completed", Agent: "sam",
 		Message: "候选源码已经生成，等待安全检查和编译。",
 	}) || !send(domain.AgentEvent{Type: "snapshot.completed", Snapshot: &snapshot}) {
 		return

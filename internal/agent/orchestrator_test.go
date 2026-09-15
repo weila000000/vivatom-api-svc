@@ -43,18 +43,14 @@ func TestPlanEventOrder(t *testing.T) {
 	}
 
 	var types []string
+	var agents []string
 	for event := range events {
 		types = append(types, event.Type)
+		if event.Type == "agent.started" {
+			agents = append(agents, event.Agent)
+		}
 	}
-	want := []string{
-		"agent.started",
-		"action.status",
-		"agent.output",
-		"action.status",
-		"agent.completed",
-		"approval.required",
-		"done",
-	}
+	want := []string{"agent.started", "action.status", "agent.output", "action.status", "agent.completed", "agent.started", "action.status", "action.status", "agent.completed", "approval.required", "done"}
 	if len(types) != len(want) {
 		t.Fatalf("event types = %v, want %v", types, want)
 	}
@@ -62,6 +58,9 @@ func TestPlanEventOrder(t *testing.T) {
 		if types[i] != want[i] {
 			t.Fatalf("event %d = %q, want %q", i, types[i], want[i])
 		}
+	}
+	if len(agents) != 2 || agents[0] != "mike" || agents[1] != "ava" {
+		t.Fatalf("planning agents = %v", agents)
 	}
 }
 
@@ -118,8 +117,12 @@ func TestBuildReturnsCandidateSnapshot(t *testing.T) {
 
 	var snapshot *domain.ProjectSnapshot
 	var lastType string
+	agents := make(map[string]bool)
 	for event := range events {
 		lastType = event.Type
+		if event.Agent != "" {
+			agents[event.Agent] = true
+		}
 		if event.Type == "snapshot.completed" {
 			snapshot = event.Snapshot
 		}
@@ -132,6 +135,11 @@ func TestBuildReturnsCandidateSnapshot(t *testing.T) {
 	}
 	if lastType != "done" {
 		t.Fatalf("last event = %q, want done", lastType)
+	}
+	for _, role := range []string{"ava", "bob", "lin", "sam"} {
+		if !agents[role] {
+			t.Fatalf("missing build agent %q in %v", role, agents)
+		}
 	}
 }
 
