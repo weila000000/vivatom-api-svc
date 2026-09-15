@@ -195,6 +195,9 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	if result == ResultForbidden {
 		return Version{}, &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
 	}
+	if result == ResultVersionConflict {
+		return Version{}, &Error{Code: "version_conflict", Status: http.StatusConflict}
+	}
 	if result == ResultCandidateInvalid || version == nil {
 		return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
 	}

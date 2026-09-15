@@ -35,6 +35,7 @@ const (
 	ResultExhausted        Result = "exhausted"
 	ResultApprovalInvalid  Result = "approval_invalid"
 	ResultCandidateInvalid Result = "candidate_invalid"
+	ResultVersionConflict  Result = "version_conflict"
 )
 
 type Error struct {

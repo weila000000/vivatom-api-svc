@@ -150,6 +150,32 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	if storedHash != snapshotHash {
 		return nil, usage.ResultCandidateInvalid, nil
 	}
+	var activeVersion sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT active_version_id FROM workspace_projects WHERE id=? AND workspace_id=?`, projectID, workspaceID).Scan(&activeVersion); err == sql.ErrNoRows {
+		return nil, usage.ResultCandidateInvalid, nil
+	} else if err != nil {
+		return nil, "", err
+	}
+	if activeVersion.String != parentVersionID {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE id=? AND status='pending'`, candidateID)
+		if updateErr != nil {
+			return nil, "", updateErr
+		}
+		changed, updateErr := result.RowsAffected()
+		if updateErr != nil {
+			return nil, "", updateErr
+		}
+		if changed != 1 {
+			return nil, usage.ResultCandidateInvalid, nil
+		}
+		if err = appendAudit(ctx, tx, workspaceID, accountID, "candidate.rejected", "project", projectID, createdAt, map[string]any{"candidateId": candidateID, "reason": "stale_parent", "expectedParentVersionId": activeVersion.String, "actualParentVersionId": parentVersionID}); err != nil {
+			return nil, "", err
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, "", err
+		}
+		return nil, usage.ResultVersionConflict, nil
+	}
 	if parentVersionID != "" {
 		var parent int
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM immutable_versions WHERE id=? AND workspace_id=? AND project_id=?`, parentVersionID, workspaceID, projectID).Scan(&parent); err != nil {

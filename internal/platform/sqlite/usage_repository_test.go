@@ -52,6 +52,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var committedVersionID string
 
 	for index := 0; index < 3; index++ {
 		approvalID, storeErr := repository.StorePlan(ctx, workspaceID, owner.User.ID, "p1", plan, "2026-01-01T00:00:00Z")
@@ -83,6 +84,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.Build == nil || version.Build.Toolchain != "test-compiler" {
 				t.Fatalf("commit candidate: version=%+v err=%v", version, commitErr)
 			}
+			committedVersionID = version.ID
 			var activeVersionID, projectStatus string
 			if err = database.QueryRow(`SELECT active_version_id,status FROM workspace_projects WHERE id=? AND workspace_id=?`, "p1", workspaceID).Scan(&activeVersionID, &projectStatus); err != nil || activeVersionID != version.ID || projectStatus != "ready" {
 				t.Fatalf("version was not atomically activated: active=%q status=%q err=%v", activeVersionID, projectStatus, err)
@@ -121,6 +123,16 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if err = database.QueryRow(`SELECT count(*) FROM immutable_versions WHERE candidate_id=?`, candidateID).Scan(&versionCount); err != nil || versionCount != 0 {
 				t.Fatalf("failed build created version: count=%d err=%v", versionCount, err)
 			}
+		}
+		if index == 2 {
+			_, conflictErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "stale build")
+			assertUsageCode(t, conflictErr, "version_conflict")
+			var candidateStatus string
+			if err = database.QueryRow(`SELECT status FROM build_candidates WHERE id=?`, candidateID).Scan(&candidateStatus); err != nil || candidateStatus != "rejected" {
+				t.Fatalf("conflicting build changed candidate: status=%q err=%v", candidateStatus, err)
+			}
+			_, retryConflictErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, committedVersionID, "stale build")
+			assertUsageCode(t, retryConflictErr, "candidate_invalid")
 		}
 	}
 	events, err := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "p1", Prompt: "plan"})
