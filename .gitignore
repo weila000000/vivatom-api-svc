@@ -1,0 +1,10 @@
+.data/
+.idea/
+.DS_Store
+*.db
+*.sqlite
+.env
+.env.*
+!.env.example
+bin/
+coverage.out
