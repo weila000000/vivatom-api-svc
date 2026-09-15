@@ -9,6 +9,25 @@ import (
 var planIdentifier = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
 
 func ValidateBuildPlan(plan BuildPlan) error {
+	if plan.RequirementBrief != nil {
+		if !boundedText(plan.RequirementBrief.Goal, 2000) {
+			return &ContractError{Code: "plan.requirement_goal_invalid"}
+		}
+		if err := validateTextList(plan.RequirementBrief.Users, 1, 20, 300, "plan.requirement_users_invalid"); err != nil {
+			return err
+		}
+		if err := validateTextList(plan.RequirementBrief.CoreFlows, 1, 30, 500, "plan.requirement_flows_invalid"); err != nil {
+			return err
+		}
+		if len(plan.RequirementBrief.Constraints) > 30 {
+			return &ContractError{Code: "plan.requirement_constraints_invalid"}
+		}
+		for _, constraint := range plan.RequirementBrief.Constraints {
+			if !boundedText(constraint, 500) {
+				return &ContractError{Code: "plan.requirement_constraints_invalid"}
+			}
+		}
+	}
 	if plan.ProductType != "website" && plan.ProductType != "web_app" {
 		return &ContractError{Code: "plan.product_type_invalid"}
 	}

@@ -24,7 +24,36 @@ func NewOpenAIProvider(config Config) *OpenAIProvider {
 	return &OpenAIProvider{config: config, client: &http.Client{Timeout: config.Timeout}}
 }
 
+func (p *OpenAIProvider) AnalyzeRequirements(ctx context.Context, prompt string) (domain.RequirementBrief, error) {
+	var brief domain.RequirementBrief
+	err := p.completeJSON(ctx, "You are a product analyst. Convert the user's request into exactly one JSON object with: goal string, users string[], coreFlows string[], constraints string[]. Keep every item concrete and concise. Include only requirements supported by the user request; put necessary engineering boundaries in constraints. No markdown or code fences.", prompt, &brief)
+	if err != nil {
+		return domain.RequirementBrief{}, err
+	}
+	if strings.TrimSpace(brief.Goal) == "" || len(brief.Users) == 0 || len(brief.CoreFlows) == 0 {
+		return domain.RequirementBrief{}, invalidOutput(errors.New("incomplete requirement brief"))
+	}
+	return brief, nil
+}
+
+func (p *OpenAIProvider) PlanFromBrief(ctx context.Context, prompt string, brief domain.RequirementBrief) (domain.BuildPlan, error) {
+	briefJSON, err := json.Marshal(brief)
+	if err != nil {
+		return domain.BuildPlan{}, invalidOutput(err)
+	}
+	plan, err := p.plan(ctx, fmt.Sprintf("Original requirement:\n%s\n\nProduct analyst brief:\n%s", prompt, briefJSON))
+	if err != nil {
+		return domain.BuildPlan{}, err
+	}
+	plan.RequirementBrief = &brief
+	return plan, nil
+}
+
 func (p *OpenAIProvider) Plan(ctx context.Context, prompt string) (domain.BuildPlan, error) {
+	return p.plan(ctx, prompt)
+}
+
+func (p *OpenAIProvider) plan(ctx context.Context, prompt string) (domain.BuildPlan, error) {
 	var plan domain.BuildPlan
 	err := p.completeJSON(ctx, "You are a product architect. Return exactly one JSON object with this shape: productType string, productSummary string, targetUsers string[], features string[], pages [{name,purpose}], filePlan [{path,responsibility}], designDirection string, acceptanceChecks string[], backend {enabled boolean, auth string, collections [{name,label,access string,fields [{name,label,type string,required boolean}]}]}. Hard constraints: productType MUST be exactly website or web_app; every filePlan.path MUST start with /src/ and end in .vue, .ts, .tsx, .js, .jsx, .css, or .json; backend.auth MUST be exactly none or email_password; collection access MUST be exactly public or owner; collection and field names MUST match ^[a-z][a-z0-9_]{0,47}$ using lowercase snake_case; field type MUST be exactly text, long_text, number, boolean, or date; when backend.enabled is false, auth MUST be none and collections MUST be empty; owner collections require email_password auth. Use Vue 3. Enum values and paths must not be translated. No markdown or code fences.", prompt, &plan)
 	if err != nil {

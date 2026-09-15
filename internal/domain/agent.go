@@ -46,16 +46,24 @@ type PlanFile struct {
 	Responsibility string `json:"responsibility"`
 }
 
+type RequirementBrief struct {
+	Goal        string   `json:"goal"`
+	Users       []string `json:"users"`
+	CoreFlows   []string `json:"coreFlows"`
+	Constraints []string `json:"constraints"`
+}
+
 type BuildPlan struct {
-	ProductType      string      `json:"productType"`
-	ProductSummary   string      `json:"productSummary"`
-	TargetUsers      []string    `json:"targetUsers"`
-	Features         []string    `json:"features"`
-	Pages            []PlanPage  `json:"pages"`
-	FilePlan         []PlanFile  `json:"filePlan"`
-	DesignDirection  string      `json:"designDirection"`
-	AcceptanceChecks []string    `json:"acceptanceChecks"`
-	Backend          BackendSpec `json:"backend"`
+	RequirementBrief *RequirementBrief `json:"requirementBrief,omitempty"`
+	ProductType      string            `json:"productType"`
+	ProductSummary   string            `json:"productSummary"`
+	TargetUsers      []string          `json:"targetUsers"`
+	Features         []string          `json:"features"`
+	Pages            []PlanPage        `json:"pages"`
+	FilePlan         []PlanFile        `json:"filePlan"`
+	DesignDirection  string            `json:"designDirection"`
+	AcceptanceChecks []string          `json:"acceptanceChecks"`
+	Backend          BackendSpec       `json:"backend"`
 }
 
 type ProjectSnapshot struct {

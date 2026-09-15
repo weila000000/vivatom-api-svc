@@ -90,15 +90,31 @@ func (o *Orchestrator) runPlan(ctx context.Context, request domain.AgentRequest,
 		return
 	}
 
-	plan, err := o.provider.Plan(ctx, request.Prompt)
+	var plan domain.BuildPlan
+	var err error
+	if collaborative, ok := o.provider.(ai.CollaborativePlanner); ok {
+		var brief domain.RequirementBrief
+		brief, err = collaborative.AnalyzeRequirements(ctx, request.Prompt)
+		if err == nil {
+			if !send(domain.AgentEvent{Type: "action.status", ID: "scope", Agent: "mike", Action: "scope_requirements", Status: "completed", Label: "需求简报已生成"}) ||
+				!send(domain.AgentEvent{Type: "agent.completed", Agent: "mike", Message: brief.Goal}) ||
+				!send(domain.AgentEvent{Type: "agent.started", Agent: "ava", Message: "正在根据需求简报设计工程方案"}) ||
+				!send(domain.AgentEvent{Type: "action.status", ID: "plan-contract", Agent: "ava", Action: "validate_plan", Status: "running", Label: "生成并校验工程方案"}) {
+				return
+			}
+			plan, err = collaborative.PlanFromBrief(ctx, request.Prompt, brief)
+		}
+	} else {
+		plan, err = o.provider.Plan(ctx, request.Prompt)
+		if err == nil && (!send(domain.AgentEvent{Type: "action.status", ID: "scope", Agent: "mike", Action: "scope_requirements", Status: "completed", Label: "需求已梳理"}) ||
+			!send(domain.AgentEvent{Type: "agent.completed", Agent: "mike", Message: "产品需求已经结构化。"}) ||
+			!send(domain.AgentEvent{Type: "agent.started", Agent: "ava", Message: "正在审查方案的工程可行性"}) ||
+			!send(domain.AgentEvent{Type: "action.status", ID: "plan-contract", Agent: "ava", Action: "validate_plan", Status: "running", Label: "校验页面、文件和数据契约"})) {
+			return
+		}
+	}
 	if err != nil {
 		o.sendProviderFailure(ctx, send, err)
-		return
-	}
-	if !send(domain.AgentEvent{Type: "action.status", ID: "scope", Agent: "mike", Action: "scope_requirements", Status: "completed", Label: "需求已梳理"}) ||
-		!send(domain.AgentEvent{Type: "agent.completed", Agent: "mike", Message: "产品需求已经结构化。"}) ||
-		!send(domain.AgentEvent{Type: "agent.started", Agent: "ava", Message: "正在审查方案的工程可行性"}) ||
-		!send(domain.AgentEvent{Type: "action.status", ID: "plan-contract", Agent: "ava", Action: "validate_plan", Status: "running", Label: "校验页面、文件和数据契约"}) {
 		return
 	}
 	if err = domain.ValidateBuildPlan(plan); err != nil {

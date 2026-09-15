@@ -13,6 +13,11 @@ type Planner interface {
 	Plan(ctx context.Context, prompt string) (domain.BuildPlan, error)
 }
 
+type CollaborativePlanner interface {
+	AnalyzeRequirements(ctx context.Context, prompt string) (domain.RequirementBrief, error)
+	PlanFromBrief(ctx context.Context, prompt string, brief domain.RequirementBrief) (domain.BuildPlan, error)
+}
+
 type Builder interface {
 	Build(ctx context.Context, prompt string, plan domain.BuildPlan) (domain.ProjectSnapshot, error)
 	Revise(ctx context.Context, action domain.AgentAction, instruction string, snapshot domain.ProjectSnapshot) (domain.ProjectSnapshot, error)

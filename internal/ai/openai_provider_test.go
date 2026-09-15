@@ -33,6 +33,30 @@ func TestOpenAIProviderBuildsPlanFromStream(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderPlansFromIndependentRequirementBrief(t *testing.T) {
+	planJSON := `{"productType":"web_app","productSummary":"任务板","targetUsers":["团队"],"features":["任务"],"pages":[{"name":"首页","purpose":"管理任务"}],"filePlan":[{"path":"/src/App.vue","responsibility":"页面"}],"designDirection":"清晰","acceptanceChecks":["可创建任务"],"backend":{"enabled":false,"auth":"none","collections":[]}}`
+	briefJSON := `{"goal":"管理团队任务","users":["小团队"],"coreFlows":["创建并分配任务"],"constraints":["移动端可用"]}`
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		content := briefJSON
+		if requests.Add(1) == 2 {
+			content = planJSON
+		}
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", content)
+	}))
+	defer server.Close()
+
+	provider := NewOpenAIProvider(Config{APIKey: "key", BaseURL: server.URL, Model: "model", Timeout: time.Second})
+	brief, err := provider.AnalyzeRequirements(context.Background(), "做一个任务板")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := provider.PlanFromBrief(context.Background(), "做一个任务板", brief)
+	if err != nil || plan.RequirementBrief == nil || plan.RequirementBrief.Goal != brief.Goal || requests.Load() != 2 {
+		t.Fatalf("plan=%+v requests=%d err=%v", plan, requests.Load(), err)
+	}
+}
+
 func TestOpenAIProviderRetriesTransientStatus(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
