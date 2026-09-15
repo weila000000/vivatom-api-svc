@@ -106,6 +106,9 @@ func (r AgentRequest) Validate() error {
 		if strings.TrimSpace(r.Prompt) == "" || r.Plan == nil {
 			return errors.New("build requires prompt and plan")
 		}
+		if err := ValidateBuildPlan(*r.Plan); err != nil {
+			return err
+		}
 	case ActionIterate, ActionPolish:
 		if strings.TrimSpace(r.Prompt) == "" || r.Snapshot == nil {
 			return fmt.Errorf("%s requires prompt and snapshot", r.Action)

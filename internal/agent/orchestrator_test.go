@@ -14,6 +14,14 @@ type rejectingGuard struct{}
 
 type contractBreakingProvider struct{ *ai.FakeProvider }
 
+type invalidPlanProvider struct{ *ai.FakeProvider }
+
+func (p invalidPlanProvider) Plan(ctx context.Context, prompt string) (domain.BuildPlan, error) {
+	plan, err := p.FakeProvider.Plan(ctx, prompt)
+	plan.FilePlan = append(plan.FilePlan, plan.FilePlan[0])
+	return plan, err
+}
+
 func (p contractBreakingProvider) Build(ctx context.Context, prompt string, plan domain.BuildPlan) (domain.ProjectSnapshot, error) {
 	snapshot, err := p.FakeProvider.Build(ctx, prompt, plan)
 	delete(snapshot.Files, "/src/App.vue")
@@ -54,6 +62,26 @@ func TestPlanEventOrder(t *testing.T) {
 		if types[i] != want[i] {
 			t.Fatalf("event %d = %q, want %q", i, types[i], want[i])
 		}
+	}
+}
+
+func TestInvalidPlanNeverReachesApproval(t *testing.T) {
+	orchestrator := NewOrchestrator(invalidPlanProvider{FakeProvider: &ai.FakeProvider{}}, generation.NewGuard())
+	events, err := orchestrator.Run(context.Background(), domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "p1", Prompt: "任务板"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejected bool
+	for event := range events {
+		if event.Type == "approval.required" {
+			t.Fatal("invalid plan reached approval")
+		}
+		if event.Type == "error" && event.Code == "plan_rejected" {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Fatal("missing plan_rejected event")
 	}
 }
 

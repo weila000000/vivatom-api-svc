@@ -95,6 +95,10 @@ func (o *Orchestrator) runPlan(ctx context.Context, request domain.AgentRequest,
 		o.sendProviderFailure(ctx, send, err)
 		return
 	}
+	if err = domain.ValidateBuildPlan(plan); err != nil {
+		o.sendFailure(ctx, send, "plan_rejected", "生成的方案不符合可执行契约，请重新规划。")
+		return
+	}
 	if !send(domain.AgentEvent{
 		Type: "action.status", ID: "scope", Agent: "mike",
 		Action: "scope_requirements", Status: "completed", Label: "需求已梳理",

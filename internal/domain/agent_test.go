@@ -4,7 +4,7 @@ import "testing"
 
 func TestAgentRequestValidate(t *testing.T) {
 	snapshot := &ProjectSnapshot{}
-	plan := &BuildPlan{}
+	plan := validBuildPlan()
 
 	tests := []struct {
 		name    string
@@ -13,7 +13,8 @@ func TestAgentRequestValidate(t *testing.T) {
 	}{
 		{"plan", AgentRequest{Action: ActionPlan, ProjectID: "p1", Prompt: "做一个任务板"}, false},
 		{"build needs plan", AgentRequest{Action: ActionBuild, ProjectID: "p1", Prompt: "开始"}, true},
-		{"build", AgentRequest{Action: ActionBuild, ProjectID: "p1", Prompt: "开始", Plan: plan}, false},
+		{"build", AgentRequest{Action: ActionBuild, ProjectID: "p1", Prompt: "开始", Plan: &plan}, false},
+		{"build rejects malformed plan", AgentRequest{Action: ActionBuild, ProjectID: "p1", Prompt: "开始", Plan: &BuildPlan{}}, true},
 		{"repair", AgentRequest{Action: ActionRepair, ProjectID: "p1", Error: "compile failed", Snapshot: snapshot}, false},
 		{"unknown", AgentRequest{Action: "unknown", ProjectID: "p1"}, true},
 		{"missing project", AgentRequest{Action: ActionPlan, Prompt: "需求"}, true},
