@@ -30,6 +30,13 @@ services:
       VIVATOM_RUNTIME_DATABASE_PATH: /app/data/vivatom.db
       VIVATOM_BUILDER_URL: http://builder:8090
       VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:-vivatom-local-builder}
+      VIVATOM_AI_PROVIDER: ${VIVATOM_AI_PROVIDER:-auto}
+      VIVATOM_AI_API_KEY: ${VIVATOM_AI_API_KEY:-}
+      VIVATOM_AI_BASE_URL: ${VIVATOM_AI_BASE_URL:-https://vibe.linux008.com/v1}
+      VIVATOM_AI_MODEL: ${VIVATOM_AI_MODEL:-gpt-6-astra}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://vibe.linux008.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-astra}
     volumes:
       - vivatom-data:/app/data
     ports:

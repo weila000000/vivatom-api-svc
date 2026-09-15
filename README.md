@@ -5,7 +5,6 @@ Vivatom 的 Go + Gin 后端。服务负责平台身份、工作区权限、Agent
 ## Development
 
 ```bash
-cp .env.example .env
 npm ci --prefix build-worker
 npm start --prefix build-worker
 ```
@@ -13,8 +12,14 @@ npm start --prefix build-worker
 另一个终端启动 API：
 
 ```bash
+cp .env.example .env
+set -a
+source .env
+set +a
 go run ./cmd/api
 ```
+
+OpenAI-compatible Provider 默认连接 `https://vibe.linux008.com/v1`。在 `.env` 中配置 `VIVATOM_AI_API_KEY`（或 `OPENAI_API_KEY`）后，`auto` 模式会启用真实 Provider；未配置密钥时使用本地 FakeProvider。
 
 默认地址为 `http://localhost:8080`。
 
