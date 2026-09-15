@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -62,8 +63,28 @@ func (s *Service) SaveDocument(ctx context.Context, token, workspaceID, projectI
 		return Document{}, apiError("document_too_large", http.StatusRequestEntityTooLarge)
 	}
 	sum := sha256.Sum256(payloadJSON)
+	contentHash := hex.EncodeToString(sum[:])
+	current, allowed, err := s.repository.GetDocumentForMember(ctx, account.ID, workspaceID, projectID)
+	if err != nil {
+		return Document{}, apiError("catalog_unavailable", http.StatusServiceUnavailable)
+	}
+	if !allowed {
+		return Document{}, apiError("workspace_forbidden", http.StatusForbidden)
+	}
+	if current != nil && current.ContentHash != contentHash {
+		if current.Revision != expectedRevision {
+			return Document{}, apiError("document_conflict", http.StatusConflict)
+		}
+		previous, decodeErr := decodeDocument(current)
+		if decodeErr != nil {
+			return Document{}, apiError("catalog_unavailable", http.StatusServiceUnavailable)
+		}
+		if !versionsAreAppendOnly(previous.Payload.Versions, payload.Versions) {
+			return Document{}, apiError("immutable_version_violation", http.StatusConflict)
+		}
+	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	stored, result, err := s.repository.SaveDocumentForMember(ctx, account.ID, workspaceID, StoredDocument{ProjectID: projectID, ContentHash: hex.EncodeToString(sum[:]), PayloadJSON: string(payloadJSON), UpdatedAt: now}, expectedRevision)
+	stored, result, err := s.repository.SaveDocumentForMember(ctx, account.ID, workspaceID, StoredDocument{ProjectID: projectID, ContentHash: contentHash, PayloadJSON: string(payloadJSON), UpdatedAt: now}, expectedRevision)
 	if err != nil {
 		return Document{}, apiError("catalog_unavailable", http.StatusServiceUnavailable)
 	}
@@ -116,6 +137,9 @@ func validateDocument(workspaceID, projectID string, payload DocumentPayload) er
 		if _, err := guard.Check(version.Snapshot); err != nil {
 			return err
 		}
+		if _, exists := versions[version.ID]; exists {
+			return apiError("invalid_document", http.StatusBadRequest)
+		}
 		versions[version.ID] = struct{}{}
 	}
 	for _, message := range payload.Messages {
@@ -136,6 +160,20 @@ func validateDocument(workspaceID, projectID string, payload DocumentPayload) er
 		}
 	}
 	return nil
+}
+
+func versionsAreAppendOnly(previous, candidate []DocumentVersion) bool {
+	current := make(map[string]DocumentVersion, len(candidate))
+	for _, version := range candidate {
+		current[version.ID] = version
+	}
+	for _, version := range previous {
+		stored, exists := current[version.ID]
+		if !exists || !reflect.DeepEqual(version, stored) {
+			return false
+		}
+	}
+	return true
 }
 
 func validMessageRole(role string) bool {

@@ -95,6 +95,27 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	if err != nil || second.Revision != 2 || second.ContentHash == first.ContentHash {
 		t.Fatalf("second save: document=%+v err=%v", second, err)
 	}
+	tampered := payload
+	tampered.Versions = append([]catalog.DocumentVersion(nil), payload.Versions...)
+	tampered.Versions[0].Prompt = "改写已经发布的版本"
+	_, err = catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, tampered)
+	assertCatalogCode(t, err, "immutable_version_violation")
+	removed := payload
+	removed.Versions = nil
+	removed.Project.ActiveVersionID = nil
+	_, err = catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, removed)
+	assertCatalogCode(t, err, "immutable_version_violation")
+	duplicated := payload
+	duplicated.Versions = append(append([]catalog.DocumentVersion(nil), payload.Versions...), payload.Versions[0])
+	_, err = catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, duplicated)
+	assertCatalogCode(t, err, "invalid_document")
+	parentVersionID := versionID
+	payload.Versions = append(payload.Versions, catalog.DocumentVersion{ID: "version-doc-2", ProjectID: projectID, ParentVersionID: &parentVersionID, Prompt: "增加筛选", CreatedAt: "2026-01-02T00:00:00Z", Snapshot: documentSnapshot()})
+	payload.Project.ActiveVersionID = &payload.Versions[1].ID
+	third, err := catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, payload)
+	if err != nil || third.Revision != 3 || len(third.Payload.Versions) != 2 {
+		t.Fatalf("append version: document=%+v err=%v", third, err)
+	}
 	restored, err := catalogService.GetDocument(ctx, owner.Session.Token, workspaceID, projectID)
 	if err != nil || restored.Payload.Project.Title != "其他设备修改" {
 		t.Fatalf("restore: document=%+v err=%v", restored, err)
@@ -113,10 +134,10 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	for _, event := range events {
 		counts[event.Action]++
 	}
-	if counts["project.created"] != 1 || counts["project.document_saved"] != 2 || counts["project.conflict_resolved"] != 1 {
+	if counts["project.created"] != 1 || counts["project.document_saved"] != 3 || counts["project.conflict_resolved"] != 1 {
 		t.Fatalf("unexpected audit counts: %+v", counts)
 	}
-	if counts["project.document_saved"] == 3 {
+	if counts["project.document_saved"] == 4 {
 		t.Fatal("idempotent document retry must not create another audit event")
 	}
 }
