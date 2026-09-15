@@ -82,6 +82,8 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			t.Fatalf("candidate was not persisted: hash=%q err=%v", storedHash, err)
 		}
 		if index == 0 {
+			_, promptErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "changed prompt")
+			assertUsageCode(t, promptErr, "candidate_invalid")
 			version, commitErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
 			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.Build == nil || version.Build.Toolchain != "test-compiler" {
 				t.Fatalf("commit candidate: version=%+v err=%v", version, commitErr)
@@ -101,7 +103,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 				t.Fatalf("idempotent commit: version=%+v err=%v", retried, retryErr)
 			}
 			restaged, restageErr := service.RestageVersion(ctx, owner.Session.Token, workspaceID, "p1", version.ID)
-			if restageErr != nil || !strings.HasPrefix(restaged.ID, "candidate_") || restaged.ID == candidateID || restaged.SnapshotHash != snapshotHash || restaged.Snapshot.Title != version.Snapshot.Title {
+			if restageErr != nil || !strings.HasPrefix(restaged.ID, "candidate_") || restaged.ID == candidateID || restaged.SnapshotHash != snapshotHash || restaged.Prompt != "恢复历史版本："+version.Snapshot.Title || restaged.Snapshot.Title != version.Snapshot.Title {
 				t.Fatalf("restage version: candidate=%+v err=%v", restaged, restageErr)
 			}
 			_, restageOtherErr := service.RestageVersion(ctx, other.Session.Token, workspaceID, "p1", version.ID)
@@ -127,13 +129,13 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			}
 		}
 		if index == 2 {
-			_, conflictErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "stale build")
+			_, conflictErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
 			assertUsageCode(t, conflictErr, "version_conflict")
 			var candidateStatus string
 			if err = database.QueryRow(`SELECT status FROM build_candidates WHERE id=?`, candidateID).Scan(&candidateStatus); err != nil || candidateStatus != "rejected" {
 				t.Fatalf("conflicting build changed candidate: status=%q err=%v", candidateStatus, err)
 			}
-			_, retryConflictErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, committedVersionID, "stale build")
+			_, retryConflictErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, committedVersionID, "build")
 			assertUsageCode(t, retryConflictErr, "candidate_invalid")
 		}
 	}

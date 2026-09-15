@@ -17,7 +17,7 @@ type UsageRepository struct{ db *sql.DB }
 
 func NewUsageRepository(db *sql.DB) *UsageRepository { return &UsageRepository{db: db} }
 
-func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accountID, projectID, usageID string, snapshot domain.ProjectSnapshot, createdAt string) (string, string, error) {
+func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accountID, projectID, usageID, prompt string, snapshot domain.ProjectSnapshot, createdAt string) (string, string, error) {
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return "", "", err
@@ -26,14 +26,14 @@ func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accou
 	snapshotHash := hex.EncodeToString(sum[:])
 	var id string
 	err = r.db.QueryRowContext(ctx, `
-		INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,snapshot_json,snapshot_hash,status,created_at)
-		SELECT 'candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,'pending',?
+		INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at)
+		SELECT 'candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,?,'pending',?
 		WHERE EXISTS (SELECT 1 FROM agent_usage WHERE id=? AND workspace_id=? AND account_id=? AND project_id=?)
-		RETURNING id`, workspaceID, accountID, projectID, usageID, string(payload), snapshotHash, createdAt, usageID, workspaceID, accountID, projectID).Scan(&id)
+		RETURNING id`, workspaceID, accountID, projectID, usageID, prompt, string(payload), snapshotHash, createdAt, usageID, workspaceID, accountID, projectID).Scan(&id)
 	return id, snapshotHash, err
 }
 
-func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string) (*domain.ProjectSnapshot, usage.Result, error) {
+func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, prompt string) (*domain.ProjectSnapshot, usage.Result, error) {
 	var member int
 	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
 		return nil, "", err
@@ -42,7 +42,7 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 		return nil, usage.ResultForbidden, nil
 	}
 	var payload string
-	err := r.db.QueryRowContext(ctx, `SELECT snapshot_json FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&payload)
+	err := r.db.QueryRowContext(ctx, `SELECT snapshot_json FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND prompt=? AND status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash, prompt).Scan(&payload)
 	if err == sql.ErrNoRows {
 		return nil, usage.ResultCandidateInvalid, nil
 	}
@@ -98,8 +98,13 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	} else if err != nil {
 		return nil, "", err
 	}
+	var snapshot domain.ProjectSnapshot
+	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
+		return nil, "", err
+	}
+	prompt := "恢复历史版本：" + snapshot.Title
 	var candidateID string
-	if err = tx.QueryRowContext(ctx, `INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,snapshot_json,snapshot_hash,status,created_at) VALUES ('candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?, 'pending',?) RETURNING id`, workspaceID, accountID, projectID, "restore:"+versionID, snapshotJSON, snapshotHash, createdAt).Scan(&candidateID); err != nil {
+	if err = tx.QueryRowContext(ctx, `INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at) VALUES ('candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,?, 'pending',?) RETURNING id`, workspaceID, accountID, projectID, "restore:"+versionID, prompt, snapshotJSON, snapshotHash, createdAt).Scan(&candidateID); err != nil {
 		return nil, "", err
 	}
 	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.restaged", "project", projectID, createdAt, map[string]any{"sourceVersionId": versionID, "candidateId": candidateID}); err != nil {
@@ -108,11 +113,7 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	if err = tx.Commit(); err != nil {
 		return nil, "", err
 	}
-	var snapshot domain.ProjectSnapshot
-	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
-		return nil, "", err
-	}
-	return &usage.Candidate{ID: candidateID, SnapshotHash: snapshotHash, Snapshot: snapshot}, usage.ResultOK, nil
+	return &usage.Candidate{ID: candidateID, SnapshotHash: snapshotHash, Prompt: prompt, Snapshot: snapshot}, usage.ResultOK, nil
 }
 
 func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, createdAt string) (*usage.Version, usage.Result, error) {

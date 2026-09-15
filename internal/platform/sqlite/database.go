@@ -166,6 +166,7 @@ func migrate(db *sql.DB) error {
 			account_id TEXT NOT NULL,
 			project_id TEXT NOT NULL,
 			usage_id TEXT NOT NULL,
+			prompt TEXT NOT NULL,
 			snapshot_json TEXT NOT NULL,
 			snapshot_hash TEXT NOT NULL,
 			status TEXT NOT NULL CHECK(status IN ('pending','committed','rejected')),
@@ -238,7 +239,10 @@ func migrate(db *sql.DB) error {
 	if err = migrateAgentUsageActions(db); err != nil {
 		return err
 	}
-	return migrateApprovedPlanPrompts(db)
+	if err = migrateApprovedPlanPrompts(db); err != nil {
+		return err
+	}
+	return migrateBuildCandidatePrompts(db)
 }
 
 func migrateApprovedPlanPrompts(db *sql.DB) error {
@@ -265,6 +269,36 @@ func migrateApprovedPlanPrompts(db *sql.DB) error {
 		return err
 	}
 	_, err = db.Exec(`ALTER TABLE approved_plans ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+func migrateBuildCandidatePrompts(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(build_candidates)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "prompt" {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if _, err = db.Exec(`ALTER TABLE build_candidates ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`UPDATE build_candidates SET prompt=coalesce((SELECT prompt FROM immutable_versions WHERE candidate_id=build_candidates.id),'')`)
 	return err
 }
 

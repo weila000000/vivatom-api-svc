@@ -26,9 +26,9 @@ type rejectedCompilation interface {
 type Repository interface {
 	Reserve(context.Context, string, string, string, string, int, string) (string, Result, error)
 	StorePlan(context.Context, string, string, string, string, domain.BuildPlan, string) (string, error)
-	StoreCandidate(context.Context, string, string, string, string, domain.ProjectSnapshot, string) (string, string, error)
+	StoreCandidate(context.Context, string, string, string, string, string, domain.ProjectSnapshot, string) (string, string, error)
 	CommitCandidate(context.Context, string, string, string, string, string, string, string, string) (*Version, Result, error)
-	LoadCandidate(context.Context, string, string, string, string, string) (*domain.ProjectSnapshot, Result, error)
+	LoadCandidate(context.Context, string, string, string, string, string, string) (*domain.ProjectSnapshot, Result, error)
 	RecordVerification(context.Context, string, string, string, string, string, domain.BuildVerification, string) (*domain.BuildVerification, Result, error)
 	RestageVersion(context.Context, string, string, string, string, string) (*Candidate, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
@@ -110,7 +110,7 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 				}
 			}
 			if event.Type == "snapshot.completed" && event.Snapshot != nil {
-				candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, *event.Snapshot, s.now().UTC().Format(time.RFC3339Nano))
+				candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, request.Prompt, *event.Snapshot, s.now().UTC().Format(time.RFC3339Nano))
 				if err != nil {
 					status = "failed"
 					event = domain.AgentEvent{Type: "error", Code: "candidate_unavailable", Message: "候选源码暂时无法存证", Retryable: true}
@@ -161,7 +161,7 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(candidateID) == "" || len(snapshotHash) != 64 || strings.TrimSpace(prompt) == "" || len([]rune(prompt)) > 20000 {
 		return Version{}, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
 	}
-	snapshot, result, err := s.repository.LoadCandidate(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash)
+	snapshot, result, err := s.repository.LoadCandidate(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, prompt)
 	if err != nil {
 		return Version{}, unavailable()
 	}

@@ -174,7 +174,7 @@ func registerDocumentVersion(t *testing.T, database *sql.DB, workspaceID, accoun
 	sum := sha256.Sum256(payload)
 	hash := hex.EncodeToString(sum[:])
 	candidateID := "candidate-" + versionID
-	if _, err = database.Exec(`INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,snapshot_json,snapshot_hash,status,created_at,committed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, candidateID, workspaceID, accountID, projectID, "test", string(payload), hash, "committed", createdAt, createdAt); err != nil {
+	if _, err = database.Exec(`INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at,committed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, candidateID, workspaceID, accountID, projectID, "test", prompt, string(payload), hash, "committed", createdAt, createdAt); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = database.Exec(`INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,verified_at) VALUES (?,?,?,?,?)`, candidateID, hash, "test-compiler", 10, createdAt); err != nil {

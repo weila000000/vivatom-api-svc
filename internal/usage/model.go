@@ -24,6 +24,7 @@ type Version struct {
 type Candidate struct {
 	ID           string                 `json:"candidateId"`
 	SnapshotHash string                 `json:"snapshotHash"`
+	Prompt       string                 `json:"prompt"`
 	Snapshot     domain.ProjectSnapshot `json:"snapshot"`
 }
 
