@@ -59,6 +59,16 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			t.Fatalf("candidate was not persisted: hash=%q err=%v", storedHash, err)
 		}
 		if index == 0 {
+			version, commitErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
+			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash {
+				t.Fatalf("commit candidate: version=%+v err=%v", version, commitErr)
+			}
+			retried, retryErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
+			if retryErr != nil || retried.ID != version.ID {
+				t.Fatalf("idempotent commit: version=%+v err=%v", retried, retryErr)
+			}
+			_, changedErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "changed prompt")
+			assertUsageCode(t, changedErr, "candidate_invalid")
 			_, reuseErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build"})
 			assertUsageCode(t, reuseErr, "approval_invalid")
 		}

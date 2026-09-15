@@ -33,6 +33,78 @@ func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accou
 	return id, snapshotHash, err
 }
 
+func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, createdAt string) (*usage.Version, usage.Result, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback()
+	var member int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
+		return nil, "", err
+	}
+	if member == 0 {
+		return nil, usage.ResultForbidden, nil
+	}
+	var snapshotJSON, storedHash string
+	err = tx.QueryRowContext(ctx, `SELECT snapshot_json,snapshot_hash FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, candidateID, workspaceID, accountID, projectID).Scan(&snapshotJSON, &storedHash)
+	if err == sql.ErrNoRows {
+		var existing usage.Version
+		err = tx.QueryRowContext(ctx, `SELECT id,project_id,coalesce(parent_version_id,''),prompt,snapshot_json,candidate_id,snapshot_hash,created_at FROM immutable_versions WHERE candidate_id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND coalesce(parent_version_id,'')=? AND prompt=?`, candidateID, workspaceID, accountID, projectID, snapshotHash, parentVersionID, prompt).Scan(&existing.ID, &existing.ProjectID, &existing.ParentVersionID, &existing.Prompt, &snapshotJSON, &existing.CandidateID, &existing.SnapshotHash, &existing.CreatedAt)
+		if err == sql.ErrNoRows {
+			return nil, usage.ResultCandidateInvalid, nil
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if err = json.Unmarshal([]byte(snapshotJSON), &existing.Snapshot); err != nil {
+			return nil, "", err
+		}
+		return &existing, usage.ResultOK, nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	if storedHash != snapshotHash {
+		return nil, usage.ResultCandidateInvalid, nil
+	}
+	if parentVersionID != "" {
+		var parent int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM immutable_versions WHERE id=? AND workspace_id=? AND project_id=?`, parentVersionID, workspaceID, projectID).Scan(&parent); err != nil {
+			return nil, "", err
+		}
+		if parent == 0 {
+			return nil, usage.ResultCandidateInvalid, nil
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE build_candidates SET status='committed',committed_at=? WHERE id=? AND status='pending'`, createdAt, candidateID)
+	if err != nil {
+		return nil, "", err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return nil, "", err
+	}
+	if changed != 1 {
+		return nil, usage.ResultCandidateInvalid, nil
+	}
+	var versionID string
+	if err = tx.QueryRowContext(ctx, `INSERT INTO immutable_versions (id,workspace_id,account_id,project_id,candidate_id,parent_version_id,prompt,snapshot_json,snapshot_hash,created_at) VALUES ('version_'||lower(hex(randomblob(16))),?,?,?,?,nullif(?,''),?,?,?,?) RETURNING id`, workspaceID, accountID, projectID, candidateID, parentVersionID, prompt, snapshotJSON, storedHash, createdAt).Scan(&versionID); err != nil {
+		return nil, "", err
+	}
+	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.committed", "project", projectID, createdAt, map[string]any{"versionId": versionID, "candidateId": candidateID, "snapshotHash": storedHash}); err != nil {
+		return nil, "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, "", err
+	}
+	var snapshot domain.ProjectSnapshot
+	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
+		return nil, "", err
+	}
+	return &usage.Version{ID: versionID, ProjectID: projectID, ParentVersionID: parentVersionID, Prompt: prompt, Snapshot: snapshot, CandidateID: candidateID, SnapshotHash: storedHash, CreatedAt: createdAt}, usage.ResultOK, nil
+}
+
 func (r *UsageRepository) StorePlan(ctx context.Context, workspaceID, accountID, projectID string, plan domain.BuildPlan, createdAt string) (string, error) {
 	payload, err := json.Marshal(plan)
 	if err != nil {

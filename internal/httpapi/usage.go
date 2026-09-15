@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -12,8 +13,39 @@ import (
 type UsageService interface {
 	Summary(context.Context, string, string) (usage.Summary, error)
 	Approve(context.Context, string, string, string, string) error
+	CommitCandidate(context.Context, string, string, string, string, string, string, string) (usage.Version, error)
 }
 type usageHandler struct{ service UsageService }
+
+type commitCandidateBody struct {
+	SnapshotHash    string `json:"snapshotHash"`
+	ParentVersionID string `json:"parentVersionId"`
+	Prompt          string `json:"prompt"`
+}
+
+func (h usageHandler) commitCandidate(c *gin.Context) {
+	token, ok := identityBearerToken(c)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		writeUsageError(c, &usage.Error{Code: "usage_unavailable", Status: 503})
+		return
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 32*1024))
+	decoder.DisallowUnknownFields()
+	var body commitCandidateBody
+	if err := decoder.Decode(&body); err != nil || ensureJSONEnded(decoder) != nil {
+		writeUsageError(c, &usage.Error{Code: "invalid_request", Status: http.StatusBadRequest})
+		return
+	}
+	version, err := h.service.CommitCandidate(c.Request.Context(), token, c.Param("workspaceId"), c.Param("projectId"), c.Param("candidateId"), body.SnapshotHash, body.ParentVersionID, body.Prompt)
+	if err != nil {
+		writeUsageError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"data": version})
+}
 
 func (h usageHandler) approve(c *gin.Context) {
 	token, ok := identityBearerToken(c)
@@ -54,6 +86,6 @@ func writeUsageError(c *gin.Context, err error) {
 	if !errors.As(err, &safe) {
 		safe = &usage.Error{Code: "usage_unavailable", Status: 503}
 	}
-	messages := map[string]string{"unauthorized": "登录已失效，请重新登录", "workspace_forbidden": "无权访问该工作区", "approval_invalid": "审批凭证无效或已使用", "usage_unavailable": "用量服务暂时不可用"}
+	messages := map[string]string{"unauthorized": "登录已失效，请重新登录", "workspace_forbidden": "无权访问该工作区", "approval_invalid": "审批凭证无效或已使用", "candidate_invalid": "候选源码凭证无效或已提交", "invalid_request": "提交版本的请求不符合协议", "usage_unavailable": "用量服务暂时不可用"}
 	c.JSON(safe.Status, gin.H{"error": gin.H{"code": safe.Code, "message": messages[safe.Code]}})
 }

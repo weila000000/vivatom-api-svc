@@ -20,6 +20,7 @@ type Repository interface {
 	Reserve(context.Context, string, string, string, string, int, string) (string, Result, error)
 	StorePlan(context.Context, string, string, string, domain.BuildPlan, string) (string, error)
 	StoreCandidate(context.Context, string, string, string, string, domain.ProjectSnapshot, string) (string, string, error)
+	CommitCandidate(context.Context, string, string, string, string, string, string, string, string) (*Version, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string) error
@@ -135,6 +136,27 @@ func (s *Service) Approve(ctx context.Context, token, workspaceID, projectID, ap
 		return &Error{Code: "approval_invalid", Status: http.StatusConflict}
 	}
 	return nil
+}
+
+func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt string) (Version, error) {
+	account, err := s.account(ctx, token)
+	if err != nil {
+		return Version{}, err
+	}
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(candidateID) == "" || len(snapshotHash) != 64 || strings.TrimSpace(prompt) == "" || len([]rune(prompt)) > 20000 {
+		return Version{}, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
+	}
+	version, result, err := s.repository.CommitCandidate(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, s.now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return Version{}, unavailable()
+	}
+	if result == ResultForbidden {
+		return Version{}, &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
+	}
+	if result == ResultCandidateInvalid || version == nil {
+		return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
+	}
+	return *version, nil
 }
 
 func (s *Service) Summary(ctx context.Context, token, workspaceID string) (Summary, error) {
