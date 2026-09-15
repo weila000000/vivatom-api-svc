@@ -45,6 +45,9 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	repository := NewUsageRepository(database)
 	service := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, acceptingCompiler{})
 	workspaceID := owner.Workspaces[0].ID
+	if _, err = database.Exec(`INSERT INTO workspace_projects (id,workspace_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?)`, "p1", workspaceID, "Usage project", "building", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := provider.Plan(ctx, "build")
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +82,10 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			version, commitErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
 			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.Build == nil || version.Build.Toolchain != "test-compiler" {
 				t.Fatalf("commit candidate: version=%+v err=%v", version, commitErr)
+			}
+			var activeVersionID, projectStatus string
+			if err = database.QueryRow(`SELECT active_version_id,status FROM workspace_projects WHERE id=? AND workspace_id=?`, "p1", workspaceID).Scan(&activeVersionID, &projectStatus); err != nil || activeVersionID != version.ID || projectStatus != "ready" {
+				t.Fatalf("version was not atomically activated: active=%q status=%q err=%v", activeVersionID, projectStatus, err)
 			}
 			var toolchain, verifiedAt string
 			var durationMS int64

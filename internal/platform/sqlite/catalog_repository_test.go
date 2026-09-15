@@ -42,6 +42,12 @@ func TestCatalogEnforcesWorkspaceMembershipAndProjectOwnership(t *testing.T) {
 	input.Status = "ready"
 	versionID := "version-1"
 	input.ActiveVersionID = &versionID
+	_, err = catalogService.Sync(ctx, owner.Session.Token, owner.Workspaces[0].ID, input)
+	assertCatalogCode(t, err, "active_version_conflict")
+	registerDocumentVersion(t, database, owner.Workspaces[0].ID, owner.User.ID, input.ID, versionID, "", "构建任务板", "2026-01-01T00:00:00Z", documentSnapshot())
+	if _, err = database.Exec(`UPDATE workspace_projects SET active_version_id=?,status='ready' WHERE id=? AND workspace_id=?`, versionID, input.ID, owner.Workspaces[0].ID); err != nil {
+		t.Fatal(err)
+	}
 	updated, err := catalogService.Sync(ctx, owner.Session.Token, owner.Workspaces[0].ID, input)
 	if err != nil || updated.Status != "ready" || updated.CreatedAt != created.CreatedAt || updated.UpdatedAt < created.UpdatedAt {
 		t.Fatalf("update failed: project=%+v err=%v", updated, err)
@@ -75,12 +81,15 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	other, _ := identityService.Register(ctx, identity.Registration{Email: "doc-other@example.com", Password: "password-two", Name: "Other", WorkspaceName: "Other Space"})
 	workspaceID, projectID, versionID := owner.Workspaces[0].ID, "project-doc", "version-doc"
 	activeVersionID := versionID
-	_, err = catalogService.Sync(ctx, owner.Session.Token, workspaceID, catalog.SyncInput{ID: projectID, Title: "云端项目", Status: "ready", ActiveVersionID: &activeVersionID})
+	_, err = catalogService.Sync(ctx, owner.Session.Token, workspaceID, catalog.SyncInput{ID: projectID, Title: "云端项目", Status: "planning"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := documentSnapshot()
 	trustedVersion := registerDocumentVersion(t, database, workspaceID, owner.User.ID, projectID, versionID, "", "构建任务板", "2026-01-01T00:00:00Z", snapshot)
+	if _, err = database.Exec(`UPDATE workspace_projects SET active_version_id=?,status='ready' WHERE id=? AND workspace_id=?`, versionID, projectID, workspaceID); err != nil {
+		t.Fatal(err)
+	}
 	payload := catalog.DocumentPayload{
 		Project:  catalog.DocumentProject{ID: projectID, WorkspaceID: workspaceID, Title: "云端项目", Status: "ready", ActiveVersionID: &activeVersionID, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 		Messages: []catalog.DocumentMessage{{ID: "message-1", ProjectID: projectID, Role: "user", Content: "构建任务板", CreatedAt: "2026-01-01T00:00:00Z"}},
@@ -121,6 +130,9 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	_, err = catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, fake)
 	assertCatalogCode(t, err, "untrusted_version")
 	trustedSecond := registerDocumentVersion(t, database, workspaceID, owner.User.ID, projectID, "version-doc-2", versionID, "增加筛选", "2026-01-02T00:00:00Z", snapshot)
+	if _, err = database.Exec(`UPDATE workspace_projects SET active_version_id=? WHERE id=? AND workspace_id=?`, trustedSecond.ID, projectID, workspaceID); err != nil {
+		t.Fatal(err)
+	}
 	payload.Versions = append(payload.Versions, trustedSecond)
 	payload.Project.ActiveVersionID = &payload.Versions[1].ID
 	third, err := catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, payload)

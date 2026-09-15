@@ -155,6 +155,7 @@ func writeCatalogError(c *gin.Context, err error) {
 	}
 	messages := map[string]string{
 		"invalid_project":             "项目目录信息不符合协议",
+		"active_version_conflict":     "当前版本只能由正式版本提交更新",
 		"workspace_forbidden":         "无权访问该工作区",
 		"unauthorized":                "登录已失效，请重新登录",
 		"catalog_unavailable":         "项目目录暂时不可用",

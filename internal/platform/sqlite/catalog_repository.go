@@ -14,21 +14,22 @@ type CatalogRepository struct{ db *sql.DB }
 
 func NewCatalogRepository(db *sql.DB) *CatalogRepository { return &CatalogRepository{db: db} }
 
-func (r *CatalogRepository) VersionsMatchForMember(ctx context.Context, accountID, workspaceID, projectID string, versions []catalog.DocumentVersion) (bool, error) {
-	if len(versions) == 0 {
-		return true, nil
+func (r *CatalogRepository) VersionsMatchForMember(ctx context.Context, accountID, workspaceID, projectID string, versions []catalog.DocumentVersion, activeVersionID *string) (bool, error) {
+	var storedActive sql.NullString
+	err := r.db.QueryRowContext(ctx, `SELECT p.active_version_id FROM workspace_projects p JOIN memberships m ON m.workspace_id=p.workspace_id WHERE p.id=? AND p.workspace_id=? AND m.account_id=?`, projectID, workspaceID, accountID).Scan(&storedActive)
+	if err == sql.ErrNoRows {
+		return false, nil
 	}
-	var member int
-	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
+	if err != nil {
 		return false, err
 	}
-	if member == 0 {
+	if storedActive.String != stringPointerValue(activeVersionID) {
 		return false, nil
 	}
 	for _, candidate := range versions {
 		var parentID, prompt, snapshotJSON, candidateID, snapshotHash, createdAt, toolchain, verifiedAt string
 		var durationMS int64
-		err := r.db.QueryRowContext(ctx, `
+		err = r.db.QueryRowContext(ctx, `
 			SELECT coalesce(v.parent_version_id,''),v.prompt,v.snapshot_json,v.candidate_id,v.snapshot_hash,v.created_at,b.toolchain,b.duration_ms,b.verified_at
 			FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash
 			WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, candidate.ID, workspaceID, projectID).
@@ -77,6 +78,18 @@ func (r *CatalogRepository) UpsertForMember(ctx context.Context, accountID strin
 	}
 	if previousActive.Valid {
 		previous.ActiveVersionID = &previousActive.String
+	}
+	if !existing {
+		var conflictingProject int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM workspace_projects WHERE id=?`, project.ID).Scan(&conflictingProject); err != nil {
+			return nil, err
+		}
+		if conflictingProject != 0 {
+			return nil, nil
+		}
+	}
+	if (!existing && project.ActiveVersionID != nil) || (existing && stringPointerValue(previous.ActiveVersionID) != stringPointerValue(project.ActiveVersionID)) {
+		return nil, catalog.ErrActiveVersionConflict
 	}
 	row := tx.QueryRowContext(ctx, `
 		INSERT INTO workspace_projects (id,workspace_id,title,status,active_version_id,created_at,updated_at)

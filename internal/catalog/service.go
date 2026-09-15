@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -24,7 +25,7 @@ type Repository interface {
 	SaveDocumentForMember(context.Context, string, string, StoredDocument, int) (*StoredDocument, SaveDocumentResult, error)
 	GetDocumentForMember(context.Context, string, string, string) (*StoredDocument, bool, error)
 	RecordConflictResolution(context.Context, string, string, string, string, string) (bool, error)
-	VersionsMatchForMember(context.Context, string, string, string, []DocumentVersion) (bool, error)
+	VersionsMatchForMember(context.Context, string, string, string, []DocumentVersion, *string) (bool, error)
 }
 
 func (s *Service) ResolveConflict(ctx context.Context, token, workspaceID, projectID, choice string) error {
@@ -88,7 +89,7 @@ func (s *Service) SaveDocument(ctx context.Context, token, workspaceID, projectI
 			}
 		}
 		added := addedVersions(previousVersions, payload.Versions)
-		trusted, verifyErr := s.repository.VersionsMatchForMember(ctx, account.ID, workspaceID, projectID, added)
+		trusted, verifyErr := s.repository.VersionsMatchForMember(ctx, account.ID, workspaceID, projectID, added, payload.Project.ActiveVersionID)
 		if verifyErr != nil {
 			return Document{}, apiError("catalog_unavailable", http.StatusServiceUnavailable)
 		}
@@ -243,6 +244,9 @@ func (s *Service) Sync(ctx context.Context, token, workspaceID string, input Syn
 	project := Project{ID: input.ID, WorkspaceID: workspaceID, Title: strings.TrimSpace(input.Title), Status: input.Status, ActiveVersionID: input.ActiveVersionID, CreatedAt: now, UpdatedAt: now}
 	stored, err := s.repository.UpsertForMember(ctx, account.ID, project)
 	if err != nil {
+		if errors.Is(err, ErrActiveVersionConflict) {
+			return Project{}, apiError("active_version_conflict", http.StatusConflict)
+		}
 		return Project{}, apiError("catalog_unavailable", http.StatusServiceUnavailable)
 	}
 	if stored == nil {

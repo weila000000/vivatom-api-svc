@@ -174,6 +174,17 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	if err = tx.QueryRowContext(ctx, `INSERT INTO immutable_versions (id,workspace_id,account_id,project_id,candidate_id,parent_version_id,prompt,snapshot_json,snapshot_hash,created_at) VALUES ('version_'||lower(hex(randomblob(16))),?,?,?,?,nullif(?,''),?,?,?,?) RETURNING id`, workspaceID, accountID, projectID, candidateID, parentVersionID, prompt, snapshotJSON, storedHash, createdAt).Scan(&versionID); err != nil {
 		return nil, "", err
 	}
+	activation, err := tx.ExecContext(ctx, `UPDATE workspace_projects SET active_version_id=?,status='ready',updated_at=? WHERE id=? AND workspace_id=?`, versionID, createdAt, projectID, workspaceID)
+	if err != nil {
+		return nil, "", err
+	}
+	activated, err := activation.RowsAffected()
+	if err != nil {
+		return nil, "", err
+	}
+	if activated != 1 {
+		return nil, usage.ResultCandidateInvalid, nil
+	}
 	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.committed", "project", projectID, createdAt, map[string]any{"versionId": versionID, "candidateId": candidateID, "snapshotHash": storedHash}); err != nil {
 		return nil, "", err
 	}

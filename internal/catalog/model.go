@@ -1,6 +1,12 @@
 package catalog
 
-import "vivatom-api-svc/internal/domain"
+import (
+	"errors"
+
+	"vivatom-api-svc/internal/domain"
+)
+
+var ErrActiveVersionConflict = errors.New("active version is controlled by version commits")
 
 type Project struct {
 	ID              string  `json:"id"`
