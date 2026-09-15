@@ -43,7 +43,7 @@ func main() {
 		log.Fatal(err)
 	}
 	provider := ai.NewProvider(aiConfig)
-	logger.Info("agent_provider_configured", "mode", aiConfig.Mode)
+	logger.Info("agent_provider_configured", "mode", aiConfig.Mode, "analyst_model", aiConfig.AnalystModel, "architect_model", aiConfig.ArchitectModel, "builder_model", aiConfig.BuilderModel)
 	orchestrator := agent.NewOrchestrator(provider, generation.NewGuard())
 	runtimeService := runtimeservice.NewService(sqlite.NewRuntimeRepository(database))
 	identityService := identity.NewService(sqlite.NewIdentityRepository(database))

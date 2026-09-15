@@ -9,21 +9,27 @@ import (
 )
 
 type Config struct {
-	Mode       string
-	APIKey     string
-	BaseURL    string
-	Model      string
-	Timeout    time.Duration
-	MaxRetries int
+	Mode           string
+	APIKey         string
+	BaseURL        string
+	Model          string
+	AnalystModel   string
+	ArchitectModel string
+	BuilderModel   string
+	Timeout        time.Duration
+	MaxRetries     int
 }
 
 func ConfigFromEnv() (Config, error) {
 	config := Config{
-		Mode:    strings.ToLower(strings.TrimSpace(os.Getenv("VIVATOM_AI_PROVIDER"))),
-		APIKey:  strings.TrimSpace(os.Getenv("VIVATOM_AI_API_KEY")),
-		BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("VIVATOM_AI_BASE_URL")), "/"),
-		Model:   strings.TrimSpace(os.Getenv("VIVATOM_AI_MODEL")),
-		Timeout: 5 * time.Minute, MaxRetries: 2,
+		Mode:           strings.ToLower(strings.TrimSpace(os.Getenv("VIVATOM_AI_PROVIDER"))),
+		APIKey:         strings.TrimSpace(os.Getenv("VIVATOM_AI_API_KEY")),
+		BaseURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("VIVATOM_AI_BASE_URL")), "/"),
+		Model:          strings.TrimSpace(os.Getenv("VIVATOM_AI_MODEL")),
+		AnalystModel:   strings.TrimSpace(os.Getenv("VIVATOM_AI_ANALYST_MODEL")),
+		ArchitectModel: strings.TrimSpace(os.Getenv("VIVATOM_AI_ARCHITECT_MODEL")),
+		BuilderModel:   strings.TrimSpace(os.Getenv("VIVATOM_AI_BUILDER_MODEL")),
+		Timeout:        5 * time.Minute, MaxRetries: 2,
 	}
 	if config.APIKey == "" {
 		config.APIKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
@@ -69,6 +75,15 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if config.Model == "" {
 		config.Model = "gpt-5.4"
+	}
+	if config.AnalystModel == "" {
+		config.AnalystModel = config.Model
+	}
+	if config.ArchitectModel == "" {
+		config.ArchitectModel = config.Model
+	}
+	if config.BuilderModel == "" {
+		config.BuilderModel = config.Model
 	}
 	return config, nil
 }

@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,7 +38,15 @@ func TestOpenAIProviderPlansFromIndependentRequirementBrief(t *testing.T) {
 	planJSON := `{"productType":"web_app","productSummary":"任务板","targetUsers":["团队"],"features":["任务"],"pages":[{"name":"首页","purpose":"管理任务"}],"filePlan":[{"path":"/src/App.vue","responsibility":"页面"}],"designDirection":"清晰","acceptanceChecks":["可创建任务"],"backend":{"enabled":false,"auth":"none","collections":[]}}`
 	briefJSON := `{"goal":"管理团队任务","users":["小团队"],"coreFlows":["创建并分配任务"],"constraints":["移动端可用"]}`
 	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	models := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var requestBody struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Error(err)
+		}
+		models = append(models, requestBody.Model)
 		content := briefJSON
 		if requests.Add(1) == 2 {
 			content = planJSON
@@ -46,14 +55,14 @@ func TestOpenAIProviderPlansFromIndependentRequirementBrief(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewOpenAIProvider(Config{APIKey: "key", BaseURL: server.URL, Model: "model", Timeout: time.Second})
+	provider := NewOpenAIProvider(Config{APIKey: "key", BaseURL: server.URL, Model: "default", AnalystModel: "analyst-model", ArchitectModel: "architect-model", Timeout: time.Second})
 	brief, err := provider.AnalyzeRequirements(context.Background(), "做一个任务板")
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan, err := provider.PlanFromBrief(context.Background(), "做一个任务板", brief)
-	if err != nil || plan.RequirementBrief == nil || plan.RequirementBrief.Goal != brief.Goal || requests.Load() != 2 {
-		t.Fatalf("plan=%+v requests=%d err=%v", plan, requests.Load(), err)
+	if err != nil || plan.RequirementBrief == nil || plan.RequirementBrief.Goal != brief.Goal || requests.Load() != 2 || len(models) != 2 || models[0] != "analyst-model" || models[1] != "architect-model" {
+		t.Fatalf("plan=%+v requests=%d models=%v err=%v", plan, requests.Load(), models, err)
 	}
 }
 
@@ -97,7 +106,7 @@ func TestProviderErrorsAreSafeAndClassified(t *testing.T) {
 }
 
 func TestConfigAutoFallsBackToFake(t *testing.T) {
-	for _, name := range []string{"VIVATOM_AI_PROVIDER", "VIVATOM_AI_API_KEY", "OPENAI_API_KEY", "VIVATOM_AI_TIMEOUT", "VIVATOM_AI_MAX_RETRIES"} {
+	for _, name := range []string{"VIVATOM_AI_PROVIDER", "VIVATOM_AI_API_KEY", "OPENAI_API_KEY", "VIVATOM_AI_TIMEOUT", "VIVATOM_AI_MAX_RETRIES", "VIVATOM_AI_ANALYST_MODEL", "VIVATOM_AI_ARCHITECT_MODEL", "VIVATOM_AI_BUILDER_MODEL"} {
 		t.Setenv(name, "")
 	}
 	config, err := ConfigFromEnv()
@@ -106,5 +115,18 @@ func TestConfigAutoFallsBackToFake(t *testing.T) {
 	}
 	if _, ok := NewProvider(config).(*FakeProvider); !ok {
 		t.Fatal("auto mode did not create fake provider")
+	}
+}
+
+func TestConfigSupportsPerRoleModels(t *testing.T) {
+	t.Setenv("VIVATOM_AI_PROVIDER", "openai")
+	t.Setenv("VIVATOM_AI_API_KEY", "key")
+	t.Setenv("VIVATOM_AI_MODEL", "default-model")
+	t.Setenv("VIVATOM_AI_ANALYST_MODEL", "fast-model")
+	t.Setenv("VIVATOM_AI_ARCHITECT_MODEL", "reasoning-model")
+	t.Setenv("VIVATOM_AI_BUILDER_MODEL", "coding-model")
+	config, err := ConfigFromEnv()
+	if err != nil || config.AnalystModel != "fast-model" || config.ArchitectModel != "reasoning-model" || config.BuilderModel != "coding-model" {
+		t.Fatalf("config=%+v err=%v", config, err)
 	}
 }

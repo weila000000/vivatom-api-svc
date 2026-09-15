@@ -21,6 +21,15 @@ type OpenAIProvider struct {
 }
 
 func NewOpenAIProvider(config Config) *OpenAIProvider {
+	if config.AnalystModel == "" {
+		config.AnalystModel = config.Model
+	}
+	if config.ArchitectModel == "" {
+		config.ArchitectModel = config.Model
+	}
+	if config.BuilderModel == "" {
+		config.BuilderModel = config.Model
+	}
 	return &OpenAIProvider{config: config, client: &http.Client{Timeout: config.Timeout}}
 }
 
@@ -100,8 +109,17 @@ func (p *OpenAIProvider) Revise(ctx context.Context, action domain.AgentAction, 
 }
 
 func (p *OpenAIProvider) completeJSON(ctx context.Context, system, user string, target any) error {
+	model := p.config.Model
+	switch {
+	case strings.HasPrefix(system, "You are a product analyst"):
+		model = p.config.AnalystModel
+	case strings.HasPrefix(system, "You are a product architect"):
+		model = p.config.ArchitectModel
+	case strings.HasPrefix(system, "You are a senior Vue 3 engineer"):
+		model = p.config.BuilderModel
+	}
 	payload := map[string]any{
-		"model": p.config.Model, "stream": true,
+		"model": model, "stream": true,
 		"response_format": map[string]string{"type": "json_object"},
 		"messages":        []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": user}},
 	}
