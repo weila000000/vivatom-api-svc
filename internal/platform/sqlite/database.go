@@ -136,6 +136,7 @@ func migrate(db *sql.DB) error {
 			workspace_id TEXT NOT NULL,
 			account_id TEXT NOT NULL,
 			project_id TEXT NOT NULL,
+			approval_id TEXT,
 			action TEXT NOT NULL CHECK(action IN ('plan','build','iterate','repair','polish')),
 			credits INTEGER NOT NULL CHECK(credits > 0),
 			status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')),
@@ -239,10 +240,47 @@ func migrate(db *sql.DB) error {
 	if err = migrateAgentUsageActions(db); err != nil {
 		return err
 	}
+	if err = migrateAgentUsageApprovals(db); err != nil {
+		return err
+	}
 	if err = migrateApprovedPlanPrompts(db); err != nil {
 		return err
 	}
 	return migrateBuildCandidatePrompts(db)
+}
+
+func migrateAgentUsageApprovals(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(agent_usage)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "approval_id" {
+			if err = rows.Close(); err != nil {
+				return err
+			}
+			_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS agent_usage_approval ON agent_usage(approval_id) WHERE approval_id IS NOT NULL`)
+			return err
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if _, err = db.Exec(`ALTER TABLE agent_usage ADD COLUMN approval_id TEXT`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS agent_usage_approval ON agent_usage(approval_id) WHERE approval_id IS NOT NULL`)
+	return err
 }
 
 func migrateApprovedPlanPrompts(db *sql.DB) error {
@@ -314,13 +352,15 @@ func migrateAgentUsageActions(db *sql.DB) error {
 		ALTER TABLE agent_usage RENAME TO agent_usage_legacy;
 		CREATE TABLE agent_usage (
 			id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, account_id TEXT NOT NULL, project_id TEXT NOT NULL,
+			approval_id TEXT,
 			action TEXT NOT NULL CHECK(action IN ('plan','build','iterate','repair','polish')),
 			credits INTEGER NOT NULL CHECK(credits > 0), status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')),
 			created_at TEXT NOT NULL, completed_at TEXT,
 			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
 			FOREIGN KEY(account_id) REFERENCES tenant_accounts(id)
 		);
-		INSERT INTO agent_usage SELECT * FROM agent_usage_legacy;
+		INSERT INTO agent_usage (id,workspace_id,account_id,project_id,action,credits,status,created_at,completed_at)
+			SELECT id,workspace_id,account_id,project_id,action,credits,status,created_at,completed_at FROM agent_usage_legacy;
 		DROP TABLE agent_usage_legacy;
 		CREATE INDEX agent_usage_workspace ON agent_usage(workspace_id, created_at DESC);
 	`)

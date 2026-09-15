@@ -57,6 +57,8 @@ type DocumentVersion struct {
 	CreatedAt       string                    `json:"createdAt"`
 	CandidateID     string                    `json:"candidateId,omitempty"`
 	SnapshotHash    string                    `json:"snapshotHash,omitempty"`
+	SourceAction    string                    `json:"sourceAction"`
+	ApprovalID      string                    `json:"approvalId,omitempty"`
 	Build           *domain.BuildVerification `json:"build,omitempty"`
 }
 

@@ -85,7 +85,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			_, promptErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "changed prompt")
 			assertUsageCode(t, promptErr, "candidate_invalid")
 			version, commitErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
-			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.Build == nil || version.Build.Toolchain != "test-compiler" {
+			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.SourceAction != "build" || version.ApprovalID != approvalID || version.Build == nil || version.Build.Toolchain != "test-compiler" {
 				t.Fatalf("commit candidate: version=%+v err=%v", version, commitErr)
 			}
 			committedVersionID = version.ID
@@ -106,6 +106,11 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if restageErr != nil || !strings.HasPrefix(restaged.ID, "candidate_") || restaged.ID == candidateID || restaged.SnapshotHash != snapshotHash || restaged.Prompt != "恢复历史版本："+version.Snapshot.Title || restaged.Snapshot.Title != version.Snapshot.Title {
 				t.Fatalf("restage version: candidate=%+v err=%v", restaged, restageErr)
 			}
+			restoredVersion, restoredErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", restaged.ID, restaged.SnapshotHash, version.ID, restaged.Prompt)
+			if restoredErr != nil || restoredVersion.SourceAction != "restore" || restoredVersion.ApprovalID != "" {
+				t.Fatalf("restored version provenance: version=%+v err=%v", restoredVersion, restoredErr)
+			}
+			committedVersionID = restoredVersion.ID
 			_, restageOtherErr := service.RestageVersion(ctx, other.Session.Token, workspaceID, "p1", version.ID)
 			assertUsageCode(t, restageOtherErr, "workspace_forbidden")
 			_, missingVersionErr := service.RestageVersion(ctx, owner.Session.Token, workspaceID, "p1", "version_missing")

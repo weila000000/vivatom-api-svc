@@ -17,6 +17,8 @@ type Version struct {
 	Snapshot        domain.ProjectSnapshot    `json:"snapshot"`
 	CandidateID     string                    `json:"candidateId"`
 	SnapshotHash    string                    `json:"snapshotHash"`
+	SourceAction    string                    `json:"sourceAction"`
+	ApprovalID      string                    `json:"approvalId,omitempty"`
 	CreatedAt       string                    `json:"createdAt"`
 	Build           *domain.BuildVerification `json:"build,omitempty"`
 }

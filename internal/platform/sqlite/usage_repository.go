@@ -129,11 +129,11 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	if member == 0 {
 		return nil, usage.ResultForbidden, nil
 	}
-	var snapshotJSON, storedHash string
-	err = tx.QueryRowContext(ctx, `SELECT c.snapshot_json,c.snapshot_hash FROM build_candidates c JOIN build_verifications v ON v.candidate_id=c.id AND v.snapshot_hash=c.snapshot_hash WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.status='pending'`, candidateID, workspaceID, accountID, projectID).Scan(&snapshotJSON, &storedHash)
+	var snapshotJSON, storedHash, sourceAction, approvalID string
+	err = tx.QueryRowContext(ctx, `SELECT c.snapshot_json,c.snapshot_hash,coalesce(u.action,'restore'),coalesce(u.approval_id,'') FROM build_candidates c JOIN build_verifications v ON v.candidate_id=c.id AND v.snapshot_hash=c.snapshot_hash LEFT JOIN agent_usage u ON u.id=c.usage_id WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.status='pending'`, candidateID, workspaceID, accountID, projectID).Scan(&snapshotJSON, &storedHash, &sourceAction, &approvalID)
 	if err == sql.ErrNoRows {
 		var existing usage.Version
-		err = tx.QueryRowContext(ctx, `SELECT id,project_id,coalesce(parent_version_id,''),prompt,snapshot_json,candidate_id,snapshot_hash,created_at FROM immutable_versions WHERE candidate_id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND coalesce(parent_version_id,'')=? AND prompt=?`, candidateID, workspaceID, accountID, projectID, snapshotHash, parentVersionID, prompt).Scan(&existing.ID, &existing.ProjectID, &existing.ParentVersionID, &existing.Prompt, &snapshotJSON, &existing.CandidateID, &existing.SnapshotHash, &existing.CreatedAt)
+		err = tx.QueryRowContext(ctx, `SELECT v.id,v.project_id,coalesce(v.parent_version_id,''),v.prompt,v.snapshot_json,v.candidate_id,v.snapshot_hash,v.created_at,coalesce(u.action,'restore'),coalesce(u.approval_id,'') FROM immutable_versions v JOIN build_candidates c ON c.id=v.candidate_id LEFT JOIN agent_usage u ON u.id=c.usage_id WHERE v.candidate_id=? AND v.workspace_id=? AND v.account_id=? AND v.project_id=? AND v.snapshot_hash=? AND coalesce(v.parent_version_id,'')=? AND v.prompt=?`, candidateID, workspaceID, accountID, projectID, snapshotHash, parentVersionID, prompt).Scan(&existing.ID, &existing.ProjectID, &existing.ParentVersionID, &existing.Prompt, &snapshotJSON, &existing.CandidateID, &existing.SnapshotHash, &existing.CreatedAt, &existing.SourceAction, &existing.ApprovalID)
 		if err == sql.ErrNoRows {
 			return nil, usage.ResultCandidateInvalid, nil
 		}
@@ -212,7 +212,7 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	if activated != 1 {
 		return nil, usage.ResultCandidateInvalid, nil
 	}
-	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.committed", "project", projectID, createdAt, map[string]any{"versionId": versionID, "candidateId": candidateID, "snapshotHash": storedHash}); err != nil {
+	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.committed", "project", projectID, createdAt, map[string]any{"versionId": versionID, "candidateId": candidateID, "snapshotHash": storedHash, "sourceAction": sourceAction, "approvalId": approvalID}); err != nil {
 		return nil, "", err
 	}
 	if err = tx.Commit(); err != nil {
@@ -222,7 +222,7 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
 		return nil, "", err
 	}
-	return &usage.Version{ID: versionID, ProjectID: projectID, ParentVersionID: parentVersionID, Prompt: prompt, Snapshot: snapshot, CandidateID: candidateID, SnapshotHash: storedHash, CreatedAt: createdAt}, usage.ResultOK, nil
+	return &usage.Version{ID: versionID, ProjectID: projectID, ParentVersionID: parentVersionID, Prompt: prompt, Snapshot: snapshot, CandidateID: candidateID, SnapshotHash: storedHash, SourceAction: sourceAction, ApprovalID: approvalID, CreatedAt: createdAt}, usage.ResultOK, nil
 }
 
 func (r *UsageRepository) StorePlan(ctx context.Context, workspaceID, accountID, projectID, prompt string, plan domain.BuildPlan, createdAt string) (string, error) {
@@ -319,7 +319,7 @@ func (r *UsageRepository) ReserveApproved(ctx context.Context, accountID, worksp
 		return "", nil, usage.ResultApprovalInvalid, nil
 	}
 	var id string
-	if err = tx.QueryRowContext(ctx, `INSERT INTO agent_usage (id,workspace_id,account_id,project_id,action,credits,status,created_at) VALUES (lower(hex(randomblob(16))),?,?,?,'build',?,'running',?) RETURNING id`, workspaceID, accountID, projectID, credits, createdAt).Scan(&id); err != nil {
+	if err = tx.QueryRowContext(ctx, `INSERT INTO agent_usage (id,workspace_id,account_id,project_id,approval_id,action,credits,status,created_at) VALUES (lower(hex(randomblob(16))),?,?,?,?,'build',?,'running',?) RETURNING id`, workspaceID, accountID, projectID, approvalID, credits, createdAt).Scan(&id); err != nil {
 		return "", nil, "", err
 	}
 	if err = appendAudit(ctx, tx, workspaceID, accountID, "agent.started", "project", projectID, createdAt, map[string]any{"action": "build", "credits": credits, "approvalId": approvalID}); err != nil {

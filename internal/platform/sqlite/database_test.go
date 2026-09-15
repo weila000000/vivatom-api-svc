@@ -54,4 +54,8 @@ func TestOpenMigratesApprovedPlanPrompt(t *testing.T) {
 	if prompt != "" {
 		t.Fatalf("legacy candidate prompt = %q", prompt)
 	}
+	var approvalID sql.NullString
+	if err = database.QueryRow(`SELECT approval_id FROM agent_usage LIMIT 1`).Scan(&approvalID); err != sql.ErrNoRows {
+		t.Fatalf("agent usage approval migration: %v", err)
+	}
 }
