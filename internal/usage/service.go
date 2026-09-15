@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"vivatom-api-svc/internal/domain"
@@ -17,6 +18,9 @@ type Runner interface {
 }
 type Repository interface {
 	Reserve(context.Context, string, string, string, string, int, string) (string, Result, error)
+	StorePlan(context.Context, string, string, string, domain.BuildPlan, string) (string, error)
+	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
+	ReserveApproved(context.Context, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string) error
 	Summary(context.Context, string, string) (Summary, bool, error)
 }
@@ -38,10 +42,25 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		return nil, err
 	}
 	cost := actionCost(request.Action)
-	if cost == 0 || request.Validate() != nil {
+	if cost == 0 {
 		return nil, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
 	}
-	usageID, result, err := s.repository.Reserve(ctx, account.ID, workspaceID, request.ProjectID, string(request.Action), cost, s.now().UTC().Format(time.RFC3339Nano))
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	var usageID string
+	var result Result
+	if request.Action == domain.ActionBuild {
+		if strings.TrimSpace(request.ProjectID) == "" || strings.TrimSpace(request.Prompt) == "" || strings.TrimSpace(request.ApprovalID) == "" {
+			return nil, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
+		}
+		var storedPlan *domain.BuildPlan
+		usageID, storedPlan, result, err = s.repository.ReserveApproved(ctx, account.ID, workspaceID, request.ProjectID, request.ApprovalID, cost, now)
+		request.Plan = storedPlan
+	} else {
+		if request.Validate() != nil {
+			return nil, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
+		}
+		usageID, result, err = s.repository.Reserve(ctx, account.ID, workspaceID, request.ProjectID, string(request.Action), cost, now)
+	}
 	if err != nil {
 		return nil, unavailable()
 	}
@@ -50,6 +69,9 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 	}
 	if result == ResultExhausted {
 		return nil, &Error{Code: "quota_exhausted", Status: http.StatusPaymentRequired}
+	}
+	if result == ResultApprovalInvalid {
+		return nil, &Error{Code: "approval_invalid", Status: http.StatusConflict}
 	}
 	events, err := s.runner.Run(ctx, request)
 	if err != nil {
@@ -61,6 +83,15 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		defer close(output)
 		status := "succeeded"
 		for event := range events {
+			if event.Type == "approval.required" && event.Plan != nil {
+				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
+				if err != nil {
+					status = "failed"
+					event = domain.AgentEvent{Type: "error", Code: "approval_unavailable", Message: "方案暂时无法保存", Retryable: true}
+				} else {
+					event.ApprovalID = approvalID
+				}
+			}
 			if event.Type == "error" {
 				status = "failed"
 			}
@@ -75,6 +106,24 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		_ = s.repository.Complete(context.Background(), usageID, status, s.now().UTC().Format(time.RFC3339Nano))
 	}()
 	return output, nil
+}
+
+func (s *Service) Approve(ctx context.Context, token, workspaceID, projectID, approvalID string) error {
+	account, err := s.account(ctx, token)
+	if err != nil {
+		return err
+	}
+	result, err := s.repository.ApprovePlan(ctx, account.ID, workspaceID, projectID, approvalID, s.now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return unavailable()
+	}
+	if result == ResultForbidden {
+		return &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
+	}
+	if result == ResultApprovalInvalid {
+		return &Error{Code: "approval_invalid", Status: http.StatusConflict}
+	}
+	return nil
 }
 
 func (s *Service) Summary(ctx context.Context, token, workspaceID string) (Summary, error) {

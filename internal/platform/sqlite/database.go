@@ -145,6 +145,20 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY(account_id) REFERENCES tenant_accounts(id)
 		);
 		CREATE INDEX IF NOT EXISTS agent_usage_workspace ON agent_usage(workspace_id, created_at DESC);
+		CREATE TABLE IF NOT EXISTS approved_plans (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			project_id TEXT NOT NULL,
+			plan_json TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('pending','approved','consumed')),
+			created_at TEXT NOT NULL,
+			approved_at TEXT,
+			consumed_at TEXT,
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+			FOREIGN KEY(account_id) REFERENCES tenant_accounts(id)
+		);
+		CREATE INDEX IF NOT EXISTS approved_plans_project ON approved_plans(workspace_id, project_id, created_at DESC);
 		CREATE TABLE IF NOT EXISTS platform_sessions (
 			token_hash TEXT PRIMARY KEY,
 			account_id TEXT NOT NULL,

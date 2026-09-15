@@ -88,7 +88,7 @@ func writeAgentError(c *gin.Context, err error) {
 	var safe *usage.Error
 	if errors.As(err, &safe) {
 		status, code = safe.Status, safe.Code
-		messages := map[string]string{"unauthorized": "登录已失效，请重新登录", "workspace_forbidden": "无权访问该工作区", "quota_exhausted": "工作区生成额度已用完", "usage_unavailable": "用量服务暂时不可用", "invalid_request": "Agent 请求不符合协议"}
+		messages := map[string]string{"unauthorized": "登录已失效，请重新登录", "workspace_forbidden": "无权访问该工作区", "quota_exhausted": "工作区生成额度已用完", "approval_invalid": "审批凭证无效或已使用", "usage_unavailable": "用量服务暂时不可用", "invalid_request": "Agent 请求不符合协议"}
 		message = messages[code]
 	}
 	c.JSON(status, gin.H{"error": gin.H{"code": code, "message": message}})

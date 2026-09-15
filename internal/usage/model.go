@@ -10,9 +10,10 @@ type Summary struct {
 type Result string
 
 const (
-	ResultOK        Result = "ok"
-	ResultForbidden Result = "forbidden"
-	ResultExhausted Result = "exhausted"
+	ResultOK              Result = "ok"
+	ResultForbidden       Result = "forbidden"
+	ResultExhausted       Result = "exhausted"
+	ResultApprovalInvalid Result = "approval_invalid"
 )
 
 type Error struct {

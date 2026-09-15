@@ -78,6 +78,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	workspaceProjects.GET("/:projectId/document", catalogHandler{service: deps.Catalog}.getDocument)
 	workspaceProjects.PUT("/:projectId/document", catalogHandler{service: deps.Catalog}.saveDocument)
 	workspaceProjects.POST("/:projectId/conflict-resolution", catalogHandler{service: deps.Catalog}.resolveConflict)
+	workspaceProjects.POST("/:projectId/plans/:approvalId/approve", usageHandler{service: deps.Usage}.approve)
 	workspaceTeam := api.Group("/platform/workspaces/:workspaceId")
 	workspaceTeam.GET("/members", teamHandler{service: deps.Team}.list)
 	workspaceTeam.POST("/invitations", teamHandler{service: deps.Team}.invite)

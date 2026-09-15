@@ -69,27 +69,29 @@ type ProjectSnapshot struct {
 }
 
 type AgentRequest struct {
-	Action    AgentAction      `json:"action"`
-	ProjectID string           `json:"projectId"`
-	Prompt    string           `json:"prompt,omitempty"`
-	Plan      *BuildPlan       `json:"plan,omitempty"`
-	Snapshot  *ProjectSnapshot `json:"snapshot,omitempty"`
-	Error     string           `json:"error,omitempty"`
+	Action     AgentAction      `json:"action"`
+	ProjectID  string           `json:"projectId"`
+	ApprovalID string           `json:"approvalId,omitempty"`
+	Prompt     string           `json:"prompt,omitempty"`
+	Plan       *BuildPlan       `json:"plan,omitempty"`
+	Snapshot   *ProjectSnapshot `json:"snapshot,omitempty"`
+	Error      string           `json:"error,omitempty"`
 }
 
 type AgentEvent struct {
-	Type      string           `json:"type"`
-	ID        string           `json:"id,omitempty"`
-	Agent     string           `json:"agent,omitempty"`
-	Action    string           `json:"action,omitempty"`
-	Status    string           `json:"status,omitempty"`
-	Label     string           `json:"label,omitempty"`
-	Text      string           `json:"text,omitempty"`
-	Message   string           `json:"message,omitempty"`
-	Code      string           `json:"code,omitempty"`
-	Retryable bool             `json:"retryable,omitempty"`
-	Plan      *BuildPlan       `json:"plan,omitempty"`
-	Snapshot  *ProjectSnapshot `json:"snapshot,omitempty"`
+	Type       string           `json:"type"`
+	ID         string           `json:"id,omitempty"`
+	Agent      string           `json:"agent,omitempty"`
+	Action     string           `json:"action,omitempty"`
+	Status     string           `json:"status,omitempty"`
+	Label      string           `json:"label,omitempty"`
+	Text       string           `json:"text,omitempty"`
+	Message    string           `json:"message,omitempty"`
+	Code       string           `json:"code,omitempty"`
+	Retryable  bool             `json:"retryable,omitempty"`
+	ApprovalID string           `json:"approvalId,omitempty"`
+	Plan       *BuildPlan       `json:"plan,omitempty"`
+	Snapshot   *ProjectSnapshot `json:"snapshot,omitempty"`
 }
 
 func (r AgentRequest) Validate() error {

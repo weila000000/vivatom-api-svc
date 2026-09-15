@@ -24,7 +24,8 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	owner, _ := identityService.Register(ctx, identity.Registration{Email: "usage-owner@example.com", Password: "password-one", Name: "Owner", WorkspaceName: "Usage"})
 	other, _ := identityService.Register(ctx, identity.Registration{Email: "usage-other@example.com", Password: "password-two", Name: "Other", WorkspaceName: "Other"})
 	provider := &ai.FakeProvider{}
-	service := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), NewUsageRepository(database))
+	repository := NewUsageRepository(database)
+	service := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository)
 	workspaceID := owner.Workspaces[0].ID
 	plan, err := provider.Plan(ctx, "build")
 	if err != nil {
@@ -32,11 +33,22 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	}
 
 	for index := 0; index < 3; index++ {
-		events, runErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", Prompt: "build", Plan: &plan})
+		approvalID, storeErr := repository.StorePlan(ctx, workspaceID, owner.User.ID, "p1", plan, "2026-01-01T00:00:00Z")
+		if storeErr != nil {
+			t.Fatal(storeErr)
+		}
+		if approveErr := service.Approve(ctx, owner.Session.Token, workspaceID, "p1", approvalID); approveErr != nil {
+			t.Fatal(approveErr)
+		}
+		events, runErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build", Plan: &domain.BuildPlan{}})
 		if runErr != nil {
 			t.Fatal(runErr)
 		}
 		for range events {
+		}
+		if index == 0 {
+			_, reuseErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build"})
+			assertUsageCode(t, reuseErr, "approval_invalid")
 		}
 	}
 	events, err := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "p1", Prompt: "plan"})
@@ -49,7 +61,14 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	if err != nil || summary.Used != 13 || summary.Remaining != 2 {
 		t.Fatalf("summary=%+v err=%v", summary, err)
 	}
-	_, err = service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", Prompt: "build", Plan: &plan})
+	approvalID, err := repository.StorePlan(ctx, workspaceID, owner.User.ID, "p1", plan, "2026-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.Approve(ctx, owner.Session.Token, workspaceID, "p1", approvalID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build"})
 	assertUsageCode(t, err, "quota_exhausted")
 	_, err = service.Summary(ctx, other.Session.Token, workspaceID)
 	assertUsageCode(t, err, "workspace_forbidden")
