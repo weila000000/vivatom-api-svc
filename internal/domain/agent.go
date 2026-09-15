@@ -79,19 +79,21 @@ type AgentRequest struct {
 }
 
 type AgentEvent struct {
-	Type       string           `json:"type"`
-	ID         string           `json:"id,omitempty"`
-	Agent      string           `json:"agent,omitempty"`
-	Action     string           `json:"action,omitempty"`
-	Status     string           `json:"status,omitempty"`
-	Label      string           `json:"label,omitempty"`
-	Text       string           `json:"text,omitempty"`
-	Message    string           `json:"message,omitempty"`
-	Code       string           `json:"code,omitempty"`
-	Retryable  bool             `json:"retryable,omitempty"`
-	ApprovalID string           `json:"approvalId,omitempty"`
-	Plan       *BuildPlan       `json:"plan,omitempty"`
-	Snapshot   *ProjectSnapshot `json:"snapshot,omitempty"`
+	Type         string           `json:"type"`
+	ID           string           `json:"id,omitempty"`
+	Agent        string           `json:"agent,omitempty"`
+	Action       string           `json:"action,omitempty"`
+	Status       string           `json:"status,omitempty"`
+	Label        string           `json:"label,omitempty"`
+	Text         string           `json:"text,omitempty"`
+	Message      string           `json:"message,omitempty"`
+	Code         string           `json:"code,omitempty"`
+	Retryable    bool             `json:"retryable,omitempty"`
+	ApprovalID   string           `json:"approvalId,omitempty"`
+	CandidateID  string           `json:"candidateId,omitempty"`
+	SnapshotHash string           `json:"snapshotHash,omitempty"`
+	Plan         *BuildPlan       `json:"plan,omitempty"`
+	Snapshot     *ProjectSnapshot `json:"snapshot,omitempty"`
 }
 
 func (r AgentRequest) Validate() error {

@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 
 	"vivatom-api-svc/internal/domain"
@@ -14,6 +16,22 @@ const defaultWorkspaceCreditLimit = 15
 type UsageRepository struct{ db *sql.DB }
 
 func NewUsageRepository(db *sql.DB) *UsageRepository { return &UsageRepository{db: db} }
+
+func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accountID, projectID, usageID string, snapshot domain.ProjectSnapshot, createdAt string) (string, string, error) {
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256(payload)
+	snapshotHash := hex.EncodeToString(sum[:])
+	var id string
+	err = r.db.QueryRowContext(ctx, `
+		INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,snapshot_json,snapshot_hash,status,created_at)
+		SELECT 'candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,'pending',?
+		WHERE EXISTS (SELECT 1 FROM agent_usage WHERE id=? AND workspace_id=? AND account_id=? AND project_id=?)
+		RETURNING id`, workspaceID, accountID, projectID, usageID, string(payload), snapshotHash, createdAt, usageID, workspaceID, accountID, projectID).Scan(&id)
+	return id, snapshotHash, err
+}
 
 func (r *UsageRepository) StorePlan(ctx context.Context, workspaceID, accountID, projectID string, plan domain.BuildPlan, createdAt string) (string, error) {
 	payload, err := json.Marshal(plan)

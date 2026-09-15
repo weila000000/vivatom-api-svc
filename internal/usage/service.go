@@ -19,6 +19,7 @@ type Runner interface {
 type Repository interface {
 	Reserve(context.Context, string, string, string, string, int, string) (string, Result, error)
 	StorePlan(context.Context, string, string, string, domain.BuildPlan, string) (string, error)
+	StoreCandidate(context.Context, string, string, string, string, domain.ProjectSnapshot, string) (string, string, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string) error
@@ -90,6 +91,16 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 					event = domain.AgentEvent{Type: "error", Code: "approval_unavailable", Message: "方案暂时无法保存", Retryable: true}
 				} else {
 					event.ApprovalID = approvalID
+				}
+			}
+			if event.Type == "snapshot.completed" && event.Snapshot != nil {
+				candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, *event.Snapshot, s.now().UTC().Format(time.RFC3339Nano))
+				if err != nil {
+					status = "failed"
+					event = domain.AgentEvent{Type: "error", Code: "candidate_unavailable", Message: "候选源码暂时无法存证", Retryable: true}
+				} else {
+					event.CandidateID = candidateID
+					event.SnapshotHash = snapshotHash
 				}
 			}
 			if event.Type == "error" {

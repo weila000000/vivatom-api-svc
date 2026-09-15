@@ -49,6 +49,8 @@ type DocumentVersion struct {
 	Prompt          string                 `json:"prompt"`
 	Snapshot        domain.ProjectSnapshot `json:"snapshot"`
 	CreatedAt       string                 `json:"createdAt"`
+	CandidateID     string                 `json:"candidateId,omitempty"`
+	SnapshotHash    string                 `json:"snapshotHash,omitempty"`
 }
 
 type DocumentPayload struct {

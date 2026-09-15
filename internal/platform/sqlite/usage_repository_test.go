@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"vivatom-api-svc/internal/agent"
@@ -44,7 +45,18 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 		if runErr != nil {
 			t.Fatal(runErr)
 		}
-		for range events {
+		var candidateID, snapshotHash string
+		for event := range events {
+			if event.Type == "snapshot.completed" {
+				candidateID, snapshotHash = event.CandidateID, event.SnapshotHash
+			}
+		}
+		if !strings.HasPrefix(candidateID, "candidate_") || len(snapshotHash) != 64 {
+			t.Fatalf("invalid candidate receipt: id=%q hash=%q", candidateID, snapshotHash)
+		}
+		var storedHash string
+		if err = database.QueryRow(`SELECT snapshot_hash FROM build_candidates WHERE id=? AND workspace_id=? AND project_id=?`, candidateID, workspaceID, "p1").Scan(&storedHash); err != nil || storedHash != snapshotHash {
+			t.Fatalf("candidate was not persisted: hash=%q err=%v", storedHash, err)
 		}
 		if index == 0 {
 			_, reuseErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build"})
