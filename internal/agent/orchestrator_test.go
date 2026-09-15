@@ -12,6 +12,14 @@ import (
 
 type rejectingGuard struct{}
 
+type contractBreakingProvider struct{ *ai.FakeProvider }
+
+func (p contractBreakingProvider) Build(ctx context.Context, prompt string, plan domain.BuildPlan) (domain.ProjectSnapshot, error) {
+	snapshot, err := p.FakeProvider.Build(ctx, prompt, plan)
+	delete(snapshot.Files, "/src/App.vue")
+	return snapshot, err
+}
+
 func (rejectingGuard) Check(domain.ProjectSnapshot) (domain.ProjectSnapshot, error) {
 	return domain.ProjectSnapshot{}, errors.New("rejected")
 }
@@ -124,6 +132,31 @@ func TestBuildNeverEmitsRejectedSnapshot(t *testing.T) {
 	}
 	if !sawRejection {
 		t.Fatal("orchestrator did not report snapshot_rejected")
+	}
+}
+
+func TestBuildNeverEmitsSnapshotThatBreaksApprovedPlan(t *testing.T) {
+	provider := contractBreakingProvider{FakeProvider: &ai.FakeProvider{}}
+	orchestrator := NewOrchestrator(provider, generation.NewGuard())
+	plan, err := provider.Plan(context.Background(), "任务看板")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := orchestrator.Run(context.Background(), domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", Prompt: "任务看板", Plan: &plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejected bool
+	for event := range events {
+		if event.Type == "snapshot.completed" {
+			t.Fatal("contract-breaking snapshot was emitted")
+		}
+		if event.Type == "error" && event.Code == "contract_rejected" {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Fatal("missing contract_rejected event")
 	}
 }
 

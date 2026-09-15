@@ -62,6 +62,10 @@ func (o *Orchestrator) runRevision(ctx context.Context, request domain.AgentRequ
 		o.sendProviderFailure(ctx, send, err)
 		return
 	}
+	if err = domain.ValidateRevisionContract(*request.Snapshot, snapshot); err != nil {
+		o.sendFailure(ctx, send, "contract_rejected", "候选源码偏离当前版本的数据契约。")
+		return
+	}
 	snapshot, err = o.guard.Check(snapshot)
 	if err != nil {
 		o.sendFailure(ctx, send, "snapshot_rejected", "候选源码未通过安全检查。")
@@ -119,6 +123,10 @@ func (o *Orchestrator) runBuild(ctx context.Context, request domain.AgentRequest
 	snapshot, err := o.provider.Build(ctx, request.Prompt, *request.Plan)
 	if err != nil {
 		o.sendProviderFailure(ctx, send, err)
+		return
+	}
+	if err = domain.ValidateBuildContract(*request.Plan, snapshot); err != nil {
+		o.sendFailure(ctx, send, "contract_rejected", "候选源码没有完整实现已批准方案。")
 		return
 	}
 	snapshot, err = o.guard.Check(snapshot)
