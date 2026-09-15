@@ -21,6 +21,12 @@ type Version struct {
 	Build           *domain.BuildVerification `json:"build,omitempty"`
 }
 
+type Candidate struct {
+	ID           string                 `json:"candidateId"`
+	SnapshotHash string                 `json:"snapshotHash"`
+	Snapshot     domain.ProjectSnapshot `json:"snapshot"`
+}
+
 type Result string
 
 const (

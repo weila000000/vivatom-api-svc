@@ -24,6 +24,7 @@ type Repository interface {
 	SaveDocumentForMember(context.Context, string, string, StoredDocument, int) (*StoredDocument, SaveDocumentResult, error)
 	GetDocumentForMember(context.Context, string, string, string) (*StoredDocument, bool, error)
 	RecordConflictResolution(context.Context, string, string, string, string, string) (bool, error)
+	VersionsMatchForMember(context.Context, string, string, string, []DocumentVersion) (bool, error)
 }
 
 func (s *Service) ResolveConflict(ctx context.Context, token, workspaceID, projectID, choice string) error {
@@ -71,16 +72,28 @@ func (s *Service) SaveDocument(ctx context.Context, token, workspaceID, projectI
 	if !allowed {
 		return Document{}, apiError("workspace_forbidden", http.StatusForbidden)
 	}
-	if current != nil && current.ContentHash != contentHash {
-		if current.Revision != expectedRevision {
-			return Document{}, apiError("document_conflict", http.StatusConflict)
+	if current == nil || current.ContentHash != contentHash {
+		var previousVersions []DocumentVersion
+		if current != nil {
+			if current.Revision != expectedRevision {
+				return Document{}, apiError("document_conflict", http.StatusConflict)
+			}
+			previous, decodeErr := decodeDocument(current)
+			if decodeErr != nil {
+				return Document{}, apiError("catalog_unavailable", http.StatusServiceUnavailable)
+			}
+			previousVersions = previous.Payload.Versions
+			if !versionsAreAppendOnly(previousVersions, payload.Versions) {
+				return Document{}, apiError("immutable_version_violation", http.StatusConflict)
+			}
 		}
-		previous, decodeErr := decodeDocument(current)
-		if decodeErr != nil {
+		added := addedVersions(previousVersions, payload.Versions)
+		trusted, verifyErr := s.repository.VersionsMatchForMember(ctx, account.ID, workspaceID, projectID, added)
+		if verifyErr != nil {
 			return Document{}, apiError("catalog_unavailable", http.StatusServiceUnavailable)
 		}
-		if !versionsAreAppendOnly(previous.Payload.Versions, payload.Versions) {
-			return Document{}, apiError("immutable_version_violation", http.StatusConflict)
+		if !trusted {
+			return Document{}, apiError("untrusted_version", http.StatusConflict)
 		}
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
@@ -174,6 +187,20 @@ func versionsAreAppendOnly(previous, candidate []DocumentVersion) bool {
 		}
 	}
 	return true
+}
+
+func addedVersions(previous, candidate []DocumentVersion) []DocumentVersion {
+	existing := make(map[string]struct{}, len(previous))
+	for _, version := range previous {
+		existing[version.ID] = struct{}{}
+	}
+	added := make([]DocumentVersion, 0)
+	for _, version := range candidate {
+		if _, found := existing[version.ID]; !found {
+			added = append(added, version)
+		}
+	}
+	return added
 }
 
 func validMessageRole(role string) bool {

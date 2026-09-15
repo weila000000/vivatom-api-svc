@@ -43,14 +43,15 @@ type DocumentMessage struct {
 }
 
 type DocumentVersion struct {
-	ID              string                 `json:"id"`
-	ProjectID       string                 `json:"projectId"`
-	ParentVersionID *string                `json:"parentVersionId,omitempty"`
-	Prompt          string                 `json:"prompt"`
-	Snapshot        domain.ProjectSnapshot `json:"snapshot"`
-	CreatedAt       string                 `json:"createdAt"`
-	CandidateID     string                 `json:"candidateId,omitempty"`
-	SnapshotHash    string                 `json:"snapshotHash,omitempty"`
+	ID              string                    `json:"id"`
+	ProjectID       string                    `json:"projectId"`
+	ParentVersionID *string                   `json:"parentVersionId,omitempty"`
+	Prompt          string                    `json:"prompt"`
+	Snapshot        domain.ProjectSnapshot    `json:"snapshot"`
+	CreatedAt       string                    `json:"createdAt"`
+	CandidateID     string                    `json:"candidateId,omitempty"`
+	SnapshotHash    string                    `json:"snapshotHash,omitempty"`
+	Build           *domain.BuildVerification `json:"build,omitempty"`
 }
 
 type DocumentPayload struct {

@@ -162,6 +162,7 @@ func writeCatalogError(c *gin.Context, err error) {
 		"document_too_large":          "项目内容超过同步大小限制",
 		"document_conflict":           "项目已在其他设备更新，请先同步最新内容",
 		"immutable_version_violation": "正式版本只能追加，不能修改或删除",
+		"untrusted_version":           "新增版本没有匹配的服务端构建记录",
 		"document_not_found":          "项目还没有可恢复的云端内容",
 		"invalid_conflict_resolution": "冲突处理方式无效",
 	}

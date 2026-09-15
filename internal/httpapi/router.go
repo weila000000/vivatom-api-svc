@@ -80,6 +80,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	workspaceProjects.POST("/:projectId/conflict-resolution", catalogHandler{service: deps.Catalog}.resolveConflict)
 	workspaceProjects.POST("/:projectId/plans/:approvalId/approve", usageHandler{service: deps.Usage}.approve)
 	workspaceProjects.POST("/:projectId/candidates/:candidateId/commit", usageHandler{service: deps.Usage}.commitCandidate)
+	workspaceProjects.POST("/:projectId/versions/:versionId/restage", usageHandler{service: deps.Usage}.restageVersion)
 	workspaceTeam := api.Group("/platform/workspaces/:workspaceId")
 	workspaceTeam.GET("/members", teamHandler{service: deps.Team}.list)
 	workspaceTeam.POST("/invitations", teamHandler{service: deps.Team}.invite)

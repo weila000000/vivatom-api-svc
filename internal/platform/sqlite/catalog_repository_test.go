@@ -2,6 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -75,10 +79,12 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot := documentSnapshot()
+	trustedVersion := registerDocumentVersion(t, database, workspaceID, owner.User.ID, projectID, versionID, "", "构建任务板", "2026-01-01T00:00:00Z", snapshot)
 	payload := catalog.DocumentPayload{
 		Project:  catalog.DocumentProject{ID: projectID, WorkspaceID: workspaceID, Title: "云端项目", Status: "ready", ActiveVersionID: &activeVersionID, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 		Messages: []catalog.DocumentMessage{{ID: "message-1", ProjectID: projectID, Role: "user", Content: "构建任务板", CreatedAt: "2026-01-01T00:00:00Z"}},
-		Versions: []catalog.DocumentVersion{{ID: versionID, ProjectID: projectID, Prompt: "构建任务板", CreatedAt: "2026-01-01T00:00:00Z", Snapshot: documentSnapshot()}},
+		Versions: []catalog.DocumentVersion{trustedVersion},
 	}
 	first, err := catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 0, payload)
 	if err != nil || first.Revision != 1 || len(first.ContentHash) != 64 {
@@ -109,8 +115,13 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	duplicated.Versions = append(append([]catalog.DocumentVersion(nil), payload.Versions...), payload.Versions[0])
 	_, err = catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, duplicated)
 	assertCatalogCode(t, err, "invalid_document")
-	parentVersionID := versionID
-	payload.Versions = append(payload.Versions, catalog.DocumentVersion{ID: "version-doc-2", ProjectID: projectID, ParentVersionID: &parentVersionID, Prompt: "增加筛选", CreatedAt: "2026-01-02T00:00:00Z", Snapshot: documentSnapshot()})
+	fake := payload
+	fake.Versions = append(append([]catalog.DocumentVersion(nil), payload.Versions...), catalog.DocumentVersion{ID: "version-fake", ProjectID: projectID, Prompt: "伪造版本", CreatedAt: "2026-01-02T00:00:00Z", Snapshot: snapshot})
+	fake.Project.ActiveVersionID = &fake.Versions[1].ID
+	_, err = catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, fake)
+	assertCatalogCode(t, err, "untrusted_version")
+	trustedSecond := registerDocumentVersion(t, database, workspaceID, owner.User.ID, projectID, "version-doc-2", versionID, "增加筛选", "2026-01-02T00:00:00Z", snapshot)
+	payload.Versions = append(payload.Versions, trustedSecond)
 	payload.Project.ActiveVersionID = &payload.Versions[1].ID
 	third, err := catalogService.SaveDocument(ctx, owner.Session.Token, workspaceID, projectID, 2, payload)
 	if err != nil || third.Revision != 3 || len(third.Payload.Versions) != 2 {
@@ -140,6 +151,33 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	if counts["project.document_saved"] == 4 {
 		t.Fatal("idempotent document retry must not create another audit event")
 	}
+}
+
+func registerDocumentVersion(t *testing.T, database *sql.DB, workspaceID, accountID, projectID, versionID, parentID, prompt, createdAt string, snapshot domain.ProjectSnapshot) catalog.DocumentVersion {
+	t.Helper()
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+	candidateID := "candidate-" + versionID
+	if _, err = database.Exec(`INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,snapshot_json,snapshot_hash,status,created_at,committed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, candidateID, workspaceID, accountID, projectID, "test", string(payload), hash, "committed", createdAt, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.Exec(`INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,verified_at) VALUES (?,?,?,?,?)`, candidateID, hash, "test-compiler", 10, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	var parent any
+	var parentPointer *string
+	if parentID != "" {
+		parent = parentID
+		parentPointer = &parentID
+	}
+	if _, err = database.Exec(`INSERT INTO immutable_versions (id,workspace_id,account_id,project_id,candidate_id,parent_version_id,prompt,snapshot_json,snapshot_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, versionID, workspaceID, accountID, projectID, candidateID, parent, prompt, string(payload), hash, createdAt); err != nil {
+		t.Fatal(err)
+	}
+	return catalog.DocumentVersion{ID: versionID, ProjectID: projectID, ParentVersionID: parentPointer, Prompt: prompt, Snapshot: snapshot, CreatedAt: createdAt, CandidateID: candidateID, SnapshotHash: hash, Build: &domain.BuildVerification{Toolchain: "test-compiler", DurationMS: 10, VerifiedAt: createdAt}}
 }
 
 func documentSnapshot() domain.ProjectSnapshot {

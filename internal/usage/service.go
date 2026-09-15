@@ -30,6 +30,7 @@ type Repository interface {
 	CommitCandidate(context.Context, string, string, string, string, string, string, string, string) (*Version, Result, error)
 	LoadCandidate(context.Context, string, string, string, string, string) (*domain.ProjectSnapshot, Result, error)
 	RecordVerification(context.Context, string, string, string, string, string, domain.BuildVerification, string) (*domain.BuildVerification, Result, error)
+	RestageVersion(context.Context, string, string, string, string, string) (*Candidate, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string) error
@@ -199,6 +200,27 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	}
 	version.Build = storedVerification
 	return *version, nil
+}
+
+func (s *Service) RestageVersion(ctx context.Context, token, workspaceID, projectID, versionID string) (Candidate, error) {
+	account, err := s.account(ctx, token)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(versionID) == "" {
+		return Candidate{}, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
+	}
+	candidate, result, err := s.repository.RestageVersion(ctx, account.ID, workspaceID, projectID, versionID, s.now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return Candidate{}, unavailable()
+	}
+	if result == ResultForbidden {
+		return Candidate{}, &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
+	}
+	if result == ResultCandidateInvalid || candidate == nil {
+		return Candidate{}, &Error{Code: "version_untrusted", Status: http.StatusConflict}
+	}
+	return *candidate, nil
 }
 
 func (s *Service) Summary(ctx context.Context, token, workspaceID string) (Summary, error) {

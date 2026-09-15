@@ -3,13 +3,56 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"reflect"
 
 	"vivatom-api-svc/internal/catalog"
+	"vivatom-api-svc/internal/domain"
 )
 
 type CatalogRepository struct{ db *sql.DB }
 
 func NewCatalogRepository(db *sql.DB) *CatalogRepository { return &CatalogRepository{db: db} }
+
+func (r *CatalogRepository) VersionsMatchForMember(ctx context.Context, accountID, workspaceID, projectID string, versions []catalog.DocumentVersion) (bool, error) {
+	if len(versions) == 0 {
+		return true, nil
+	}
+	var member int
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
+		return false, err
+	}
+	if member == 0 {
+		return false, nil
+	}
+	for _, candidate := range versions {
+		var parentID, prompt, snapshotJSON, candidateID, snapshotHash, createdAt, toolchain, verifiedAt string
+		var durationMS int64
+		err := r.db.QueryRowContext(ctx, `
+			SELECT coalesce(v.parent_version_id,''),v.prompt,v.snapshot_json,v.candidate_id,v.snapshot_hash,v.created_at,b.toolchain,b.duration_ms,b.verified_at
+			FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash
+			WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, candidate.ID, workspaceID, projectID).
+			Scan(&parentID, &prompt, &snapshotJSON, &candidateID, &snapshotHash, &createdAt, &toolchain, &durationMS, &verifiedAt)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		var snapshot domain.ProjectSnapshot
+		if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
+			return false, err
+		}
+		candidateParent := ""
+		if candidate.ParentVersionID != nil {
+			candidateParent = *candidate.ParentVersionID
+		}
+		if candidate.Build == nil || parentID != candidateParent || prompt != candidate.Prompt || candidateID != candidate.CandidateID || snapshotHash != candidate.SnapshotHash || createdAt != candidate.CreatedAt || toolchain != candidate.Build.Toolchain || durationMS != candidate.Build.DurationMS || verifiedAt != candidate.Build.VerifiedAt || !reflect.DeepEqual(snapshot, candidate.Snapshot) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
 
 func (r *CatalogRepository) UpsertForMember(ctx context.Context, accountID string, project catalog.Project) (*catalog.Project, error) {
 	tx, err := r.db.BeginTx(ctx, nil)

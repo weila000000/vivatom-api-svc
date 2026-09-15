@@ -79,6 +79,42 @@ func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, wor
 	return &stored, usage.ResultOK, nil
 }
 
+func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspaceID, projectID, versionID, createdAt string) (*usage.Candidate, usage.Result, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback()
+	var member int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
+		return nil, "", err
+	}
+	if member == 0 {
+		return nil, usage.ResultForbidden, nil
+	}
+	var snapshotJSON, snapshotHash string
+	if err = tx.QueryRowContext(ctx, `SELECT v.snapshot_json,v.snapshot_hash FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, versionID, workspaceID, projectID).Scan(&snapshotJSON, &snapshotHash); err == sql.ErrNoRows {
+		return nil, usage.ResultCandidateInvalid, nil
+	} else if err != nil {
+		return nil, "", err
+	}
+	var candidateID string
+	if err = tx.QueryRowContext(ctx, `INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,snapshot_json,snapshot_hash,status,created_at) VALUES ('candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?, 'pending',?) RETURNING id`, workspaceID, accountID, projectID, "restore:"+versionID, snapshotJSON, snapshotHash, createdAt).Scan(&candidateID); err != nil {
+		return nil, "", err
+	}
+	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.restaged", "project", projectID, createdAt, map[string]any{"sourceVersionId": versionID, "candidateId": candidateID}); err != nil {
+		return nil, "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, "", err
+	}
+	var snapshot domain.ProjectSnapshot
+	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
+		return nil, "", err
+	}
+	return &usage.Candidate{ID: candidateID, SnapshotHash: snapshotHash, Snapshot: snapshot}, usage.ResultOK, nil
+}
+
 func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, createdAt string) (*usage.Version, usage.Result, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -89,6 +89,14 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if retryErr != nil || retried.ID != version.ID {
 				t.Fatalf("idempotent commit: version=%+v err=%v", retried, retryErr)
 			}
+			restaged, restageErr := service.RestageVersion(ctx, owner.Session.Token, workspaceID, "p1", version.ID)
+			if restageErr != nil || !strings.HasPrefix(restaged.ID, "candidate_") || restaged.ID == candidateID || restaged.SnapshotHash != snapshotHash || restaged.Snapshot.Title != version.Snapshot.Title {
+				t.Fatalf("restage version: candidate=%+v err=%v", restaged, restageErr)
+			}
+			_, restageOtherErr := service.RestageVersion(ctx, other.Session.Token, workspaceID, "p1", version.ID)
+			assertUsageCode(t, restageOtherErr, "workspace_forbidden")
+			_, missingVersionErr := service.RestageVersion(ctx, owner.Session.Token, workspaceID, "p1", "version_missing")
+			assertUsageCode(t, missingVersionErr, "version_untrusted")
 			_, changedErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "changed prompt")
 			assertUsageCode(t, changedErr, "candidate_invalid")
 			_, reuseErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build"})
