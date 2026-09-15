@@ -85,7 +85,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			_, promptErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "changed prompt")
 			assertUsageCode(t, promptErr, "candidate_invalid")
 			version, commitErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
-			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.SourceAction != "build" || version.ApprovalID != approvalID || version.Build == nil || version.Build.Toolchain != "test-compiler" {
+			if commitErr != nil || !strings.HasPrefix(version.ID, "version_") || version.CandidateID != candidateID || version.SnapshotHash != snapshotHash || version.SourceAction != "build" || version.ApprovalID != approvalID || version.Safety == nil || version.Safety.Policy != "snapshot-guard/v1" || version.Build == nil || version.Build.Toolchain != "test-compiler" {
 				t.Fatalf("commit candidate: version=%+v err=%v", version, commitErr)
 			}
 			committedVersionID = version.ID
@@ -107,7 +107,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 				t.Fatalf("restage version: candidate=%+v err=%v", restaged, restageErr)
 			}
 			restoredVersion, restoredErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", restaged.ID, restaged.SnapshotHash, version.ID, restaged.Prompt)
-			if restoredErr != nil || restoredVersion.SourceAction != "restore" || restoredVersion.ApprovalID != "" {
+			if restoredErr != nil || restoredVersion.SourceAction != "restore" || restoredVersion.ApprovalID != "" || restoredVersion.Safety == nil || restoredVersion.Safety.Policy != version.Safety.Policy || restoredVersion.Safety.VerifiedAt != version.Safety.VerifiedAt {
 				t.Fatalf("restored version provenance: version=%+v err=%v", restoredVersion, restoredErr)
 			}
 			committedVersionID = restoredVersion.ID

@@ -27,13 +27,13 @@ func (r *CatalogRepository) VersionsMatchForMember(ctx context.Context, accountI
 		return false, nil
 	}
 	for _, candidate := range versions {
-		var parentID, prompt, snapshotJSON, candidateID, snapshotHash, createdAt, toolchain, verifiedAt, sourceAction, approvalID string
+		var parentID, prompt, snapshotJSON, candidateID, snapshotHash, createdAt, toolchain, verifiedAt, sourceAction, approvalID, safetyPolicy, safetyVerifiedAt string
 		var durationMS int64
 		err = r.db.QueryRowContext(ctx, `
-			SELECT coalesce(v.parent_version_id,''),v.prompt,v.snapshot_json,v.candidate_id,v.snapshot_hash,v.created_at,b.toolchain,b.duration_ms,b.verified_at,coalesce(u.action,'restore'),coalesce(u.approval_id,'')
-			FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash JOIN build_candidates c ON c.id=v.candidate_id LEFT JOIN agent_usage u ON u.id=c.usage_id
+			SELECT coalesce(v.parent_version_id,''),v.prompt,v.snapshot_json,v.candidate_id,v.snapshot_hash,v.created_at,b.toolchain,b.duration_ms,b.verified_at,coalesce(u.action,'restore'),coalesce(u.approval_id,''),s.policy,s.verified_at
+			FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash JOIN safety_verifications s ON s.candidate_id=v.candidate_id AND s.snapshot_hash=v.snapshot_hash JOIN build_candidates c ON c.id=v.candidate_id LEFT JOIN agent_usage u ON u.id=c.usage_id
 			WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, candidate.ID, workspaceID, projectID).
-			Scan(&parentID, &prompt, &snapshotJSON, &candidateID, &snapshotHash, &createdAt, &toolchain, &durationMS, &verifiedAt, &sourceAction, &approvalID)
+			Scan(&parentID, &prompt, &snapshotJSON, &candidateID, &snapshotHash, &createdAt, &toolchain, &durationMS, &verifiedAt, &sourceAction, &approvalID, &safetyPolicy, &safetyVerifiedAt)
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
@@ -48,7 +48,7 @@ func (r *CatalogRepository) VersionsMatchForMember(ctx context.Context, accountI
 		if candidate.ParentVersionID != nil {
 			candidateParent = *candidate.ParentVersionID
 		}
-		if candidate.Build == nil || parentID != candidateParent || prompt != candidate.Prompt || candidateID != candidate.CandidateID || snapshotHash != candidate.SnapshotHash || createdAt != candidate.CreatedAt || toolchain != candidate.Build.Toolchain || durationMS != candidate.Build.DurationMS || verifiedAt != candidate.Build.VerifiedAt || sourceAction != candidate.SourceAction || approvalID != candidate.ApprovalID || !reflect.DeepEqual(snapshot, candidate.Snapshot) {
+		if candidate.Build == nil || candidate.Safety == nil || parentID != candidateParent || prompt != candidate.Prompt || candidateID != candidate.CandidateID || snapshotHash != candidate.SnapshotHash || createdAt != candidate.CreatedAt || toolchain != candidate.Build.Toolchain || durationMS != candidate.Build.DurationMS || verifiedAt != candidate.Build.VerifiedAt || sourceAction != candidate.SourceAction || approvalID != candidate.ApprovalID || safetyPolicy != candidate.Safety.Policy || safetyVerifiedAt != candidate.Safety.VerifiedAt || !reflect.DeepEqual(snapshot, candidate.Snapshot) {
 			return false, nil
 		}
 	}

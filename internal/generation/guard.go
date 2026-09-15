@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	PolicyVersion        = "snapshot-guard/v1"
 	MaxSnapshotFiles     = 80
 	MaxSnapshotFileBytes = 256 * 1024
 	MaxSnapshotBytes     = 2 * 1024 * 1024

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"vivatom-api-svc/internal/domain"
+	"vivatom-api-svc/internal/generation"
 	"vivatom-api-svc/internal/usage"
 )
 
@@ -24,13 +25,27 @@ func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accou
 	}
 	sum := sha256.Sum256(payload)
 	snapshotHash := hex.EncodeToString(sum[:])
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
 	var id string
-	err = r.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at)
 		SELECT 'candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,?,'pending',?
 		WHERE EXISTS (SELECT 1 FROM agent_usage WHERE id=? AND workspace_id=? AND account_id=? AND project_id=?)
 		RETURNING id`, workspaceID, accountID, projectID, usageID, prompt, string(payload), snapshotHash, createdAt, usageID, workspaceID, accountID, projectID).Scan(&id)
-	return id, snapshotHash, err
+	if err != nil {
+		return "", "", err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO safety_verifications (candidate_id,snapshot_hash,policy,verified_at) VALUES (?,?,?,?)`, id, snapshotHash, generation.PolicyVersion, createdAt); err != nil {
+		return "", "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return id, snapshotHash, nil
 }
 
 func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, prompt string) (*domain.ProjectSnapshot, usage.Result, error) {
@@ -92,8 +107,8 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	if member == 0 {
 		return nil, usage.ResultForbidden, nil
 	}
-	var snapshotJSON, snapshotHash string
-	if err = tx.QueryRowContext(ctx, `SELECT v.snapshot_json,v.snapshot_hash FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, versionID, workspaceID, projectID).Scan(&snapshotJSON, &snapshotHash); err == sql.ErrNoRows {
+	var snapshotJSON, snapshotHash, safetyPolicy, safetyVerifiedAt string
+	if err = tx.QueryRowContext(ctx, `SELECT v.snapshot_json,v.snapshot_hash,s.policy,s.verified_at FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash JOIN safety_verifications s ON s.candidate_id=v.candidate_id AND s.snapshot_hash=v.snapshot_hash WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, versionID, workspaceID, projectID).Scan(&snapshotJSON, &snapshotHash, &safetyPolicy, &safetyVerifiedAt); err == sql.ErrNoRows {
 		return nil, usage.ResultCandidateInvalid, nil
 	} else if err != nil {
 		return nil, "", err
@@ -105,6 +120,9 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	prompt := "恢复历史版本：" + snapshot.Title
 	var candidateID string
 	if err = tx.QueryRowContext(ctx, `INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at) VALUES ('candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,?, 'pending',?) RETURNING id`, workspaceID, accountID, projectID, "restore:"+versionID, prompt, snapshotJSON, snapshotHash, createdAt).Scan(&candidateID); err != nil {
+		return nil, "", err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO safety_verifications (candidate_id,snapshot_hash,policy,verified_at) VALUES (?,?,?,?)`, candidateID, snapshotHash, safetyPolicy, safetyVerifiedAt); err != nil {
 		return nil, "", err
 	}
 	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.restaged", "project", projectID, createdAt, map[string]any{"sourceVersionId": versionID, "candidateId": candidateID}); err != nil {
@@ -129,11 +147,11 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	if member == 0 {
 		return nil, usage.ResultForbidden, nil
 	}
-	var snapshotJSON, storedHash, sourceAction, approvalID string
-	err = tx.QueryRowContext(ctx, `SELECT c.snapshot_json,c.snapshot_hash,coalesce(u.action,'restore'),coalesce(u.approval_id,'') FROM build_candidates c JOIN build_verifications v ON v.candidate_id=c.id AND v.snapshot_hash=c.snapshot_hash LEFT JOIN agent_usage u ON u.id=c.usage_id WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.status='pending'`, candidateID, workspaceID, accountID, projectID).Scan(&snapshotJSON, &storedHash, &sourceAction, &approvalID)
+	var snapshotJSON, storedHash, sourceAction, approvalID, safetyPolicy, safetyVerifiedAt string
+	err = tx.QueryRowContext(ctx, `SELECT c.snapshot_json,c.snapshot_hash,coalesce(u.action,'restore'),coalesce(u.approval_id,''),s.policy,s.verified_at FROM build_candidates c JOIN build_verifications v ON v.candidate_id=c.id AND v.snapshot_hash=c.snapshot_hash JOIN safety_verifications s ON s.candidate_id=c.id AND s.snapshot_hash=c.snapshot_hash LEFT JOIN agent_usage u ON u.id=c.usage_id WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.status='pending'`, candidateID, workspaceID, accountID, projectID).Scan(&snapshotJSON, &storedHash, &sourceAction, &approvalID, &safetyPolicy, &safetyVerifiedAt)
 	if err == sql.ErrNoRows {
 		var existing usage.Version
-		err = tx.QueryRowContext(ctx, `SELECT v.id,v.project_id,coalesce(v.parent_version_id,''),v.prompt,v.snapshot_json,v.candidate_id,v.snapshot_hash,v.created_at,coalesce(u.action,'restore'),coalesce(u.approval_id,'') FROM immutable_versions v JOIN build_candidates c ON c.id=v.candidate_id LEFT JOIN agent_usage u ON u.id=c.usage_id WHERE v.candidate_id=? AND v.workspace_id=? AND v.account_id=? AND v.project_id=? AND v.snapshot_hash=? AND coalesce(v.parent_version_id,'')=? AND v.prompt=?`, candidateID, workspaceID, accountID, projectID, snapshotHash, parentVersionID, prompt).Scan(&existing.ID, &existing.ProjectID, &existing.ParentVersionID, &existing.Prompt, &snapshotJSON, &existing.CandidateID, &existing.SnapshotHash, &existing.CreatedAt, &existing.SourceAction, &existing.ApprovalID)
+		err = tx.QueryRowContext(ctx, `SELECT v.id,v.project_id,coalesce(v.parent_version_id,''),v.prompt,v.snapshot_json,v.candidate_id,v.snapshot_hash,v.created_at,coalesce(u.action,'restore'),coalesce(u.approval_id,''),s.policy,s.verified_at FROM immutable_versions v JOIN build_candidates c ON c.id=v.candidate_id JOIN safety_verifications s ON s.candidate_id=c.id AND s.snapshot_hash=v.snapshot_hash LEFT JOIN agent_usage u ON u.id=c.usage_id WHERE v.candidate_id=? AND v.workspace_id=? AND v.account_id=? AND v.project_id=? AND v.snapshot_hash=? AND coalesce(v.parent_version_id,'')=? AND v.prompt=?`, candidateID, workspaceID, accountID, projectID, snapshotHash, parentVersionID, prompt).Scan(&existing.ID, &existing.ProjectID, &existing.ParentVersionID, &existing.Prompt, &snapshotJSON, &existing.CandidateID, &existing.SnapshotHash, &existing.CreatedAt, &existing.SourceAction, &existing.ApprovalID, &safetyPolicy, &safetyVerifiedAt)
 		if err == sql.ErrNoRows {
 			return nil, usage.ResultCandidateInvalid, nil
 		}
@@ -143,6 +161,7 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 		if err = json.Unmarshal([]byte(snapshotJSON), &existing.Snapshot); err != nil {
 			return nil, "", err
 		}
+		existing.Safety = &domain.SafetyVerification{Policy: safetyPolicy, VerifiedAt: safetyVerifiedAt}
 		return &existing, usage.ResultOK, nil
 	}
 	if err != nil {
@@ -222,7 +241,7 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
 		return nil, "", err
 	}
-	return &usage.Version{ID: versionID, ProjectID: projectID, ParentVersionID: parentVersionID, Prompt: prompt, Snapshot: snapshot, CandidateID: candidateID, SnapshotHash: storedHash, SourceAction: sourceAction, ApprovalID: approvalID, CreatedAt: createdAt}, usage.ResultOK, nil
+	return &usage.Version{ID: versionID, ProjectID: projectID, ParentVersionID: parentVersionID, Prompt: prompt, Snapshot: snapshot, CandidateID: candidateID, SnapshotHash: storedHash, SourceAction: sourceAction, ApprovalID: approvalID, CreatedAt: createdAt, Safety: &domain.SafetyVerification{Policy: safetyPolicy, VerifiedAt: safetyVerifiedAt}}, usage.ResultOK, nil
 }
 
 func (r *UsageRepository) StorePlan(ctx context.Context, workspaceID, accountID, projectID, prompt string, plan domain.BuildPlan, createdAt string) (string, error) {

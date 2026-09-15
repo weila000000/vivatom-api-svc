@@ -10,17 +10,18 @@ type Summary struct {
 }
 
 type Version struct {
-	ID              string                    `json:"id"`
-	ProjectID       string                    `json:"projectId"`
-	ParentVersionID string                    `json:"parentVersionId,omitempty"`
-	Prompt          string                    `json:"prompt"`
-	Snapshot        domain.ProjectSnapshot    `json:"snapshot"`
-	CandidateID     string                    `json:"candidateId"`
-	SnapshotHash    string                    `json:"snapshotHash"`
-	SourceAction    string                    `json:"sourceAction"`
-	ApprovalID      string                    `json:"approvalId,omitempty"`
-	CreatedAt       string                    `json:"createdAt"`
-	Build           *domain.BuildVerification `json:"build,omitempty"`
+	ID              string                     `json:"id"`
+	ProjectID       string                     `json:"projectId"`
+	ParentVersionID string                     `json:"parentVersionId,omitempty"`
+	Prompt          string                     `json:"prompt"`
+	Snapshot        domain.ProjectSnapshot     `json:"snapshot"`
+	CandidateID     string                     `json:"candidateId"`
+	SnapshotHash    string                     `json:"snapshotHash"`
+	SourceAction    string                     `json:"sourceAction"`
+	ApprovalID      string                     `json:"approvalId,omitempty"`
+	CreatedAt       string                     `json:"createdAt"`
+	Build           *domain.BuildVerification  `json:"build,omitempty"`
+	Safety          *domain.SafetyVerification `json:"safety,omitempty"`
 }
 
 type Candidate struct {

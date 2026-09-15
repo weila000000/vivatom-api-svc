@@ -48,6 +48,10 @@ func TestOpenMigratesApprovedPlanPrompt(t *testing.T) {
 	if prompt != "" {
 		t.Fatalf("legacy prompt = %q", prompt)
 	}
+	var policy string
+	if err = database.QueryRow(`SELECT policy FROM safety_verifications WHERE candidate_id='legacy-candidate'`).Scan(&policy); err != nil || policy != "snapshot-guard/legacy" {
+		t.Fatalf("legacy safety policy = %q, err=%v", policy, err)
+	}
 	if err = database.QueryRow(`SELECT prompt FROM build_candidates WHERE id='legacy-candidate'`).Scan(&prompt); err != nil {
 		t.Fatal(err)
 	}

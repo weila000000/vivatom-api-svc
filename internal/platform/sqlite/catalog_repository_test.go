@@ -177,6 +177,9 @@ func registerDocumentVersion(t *testing.T, database *sql.DB, workspaceID, accoun
 	if _, err = database.Exec(`INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at,committed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, candidateID, workspaceID, accountID, projectID, "test", prompt, string(payload), hash, "committed", createdAt, createdAt); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = database.Exec(`INSERT INTO safety_verifications (candidate_id,snapshot_hash,policy,verified_at) VALUES (?,?,?,?)`, candidateID, hash, "snapshot-guard/v1", createdAt); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = database.Exec(`INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,verified_at) VALUES (?,?,?,?,?)`, candidateID, hash, "test-compiler", 10, createdAt); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +192,7 @@ func registerDocumentVersion(t *testing.T, database *sql.DB, workspaceID, accoun
 	if _, err = database.Exec(`INSERT INTO immutable_versions (id,workspace_id,account_id,project_id,candidate_id,parent_version_id,prompt,snapshot_json,snapshot_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, versionID, workspaceID, accountID, projectID, candidateID, parent, prompt, string(payload), hash, createdAt); err != nil {
 		t.Fatal(err)
 	}
-	return catalog.DocumentVersion{ID: versionID, ProjectID: projectID, ParentVersionID: parentPointer, Prompt: prompt, Snapshot: snapshot, CreatedAt: createdAt, CandidateID: candidateID, SnapshotHash: hash, SourceAction: "restore", Build: &domain.BuildVerification{Toolchain: "test-compiler", DurationMS: 10, VerifiedAt: createdAt}}
+	return catalog.DocumentVersion{ID: versionID, ProjectID: projectID, ParentVersionID: parentPointer, Prompt: prompt, Snapshot: snapshot, CreatedAt: createdAt, CandidateID: candidateID, SnapshotHash: hash, SourceAction: "restore", Build: &domain.BuildVerification{Toolchain: "test-compiler", DurationMS: 10, VerifiedAt: createdAt}, Safety: &domain.SafetyVerification{Policy: "snapshot-guard/v1", VerifiedAt: createdAt}}
 }
 
 func documentSnapshot() domain.ProjectSnapshot {

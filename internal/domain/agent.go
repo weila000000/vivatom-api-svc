@@ -82,6 +82,11 @@ type BuildVerification struct {
 	VerifiedAt string `json:"verifiedAt,omitempty"`
 }
 
+type SafetyVerification struct {
+	Policy     string `json:"policy"`
+	VerifiedAt string `json:"verifiedAt"`
+}
+
 type AgentRequest struct {
 	Action     AgentAction      `json:"action"`
 	ProjectID  string           `json:"projectId"`

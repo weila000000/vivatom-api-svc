@@ -177,6 +177,15 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY(account_id) REFERENCES tenant_accounts(id)
 		);
 		CREATE INDEX IF NOT EXISTS build_candidates_project ON build_candidates(workspace_id, project_id, created_at DESC);
+		CREATE TABLE IF NOT EXISTS safety_verifications (
+			candidate_id TEXT PRIMARY KEY,
+			snapshot_hash TEXT NOT NULL,
+			policy TEXT NOT NULL,
+			verified_at TEXT NOT NULL,
+			FOREIGN KEY(candidate_id) REFERENCES build_candidates(id) ON DELETE CASCADE
+		);
+		INSERT OR IGNORE INTO safety_verifications (candidate_id,snapshot_hash,policy,verified_at)
+			SELECT id,snapshot_hash,'snapshot-guard/legacy',created_at FROM build_candidates;
 		CREATE TABLE IF NOT EXISTS build_verifications (
 			candidate_id TEXT PRIMARY KEY,
 			snapshot_hash TEXT NOT NULL,
