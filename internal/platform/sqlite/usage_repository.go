@@ -484,6 +484,9 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 }
 
 func (r *UsageRepository) StorePlan(ctx context.Context, workspaceID, accountID, projectID, prompt string, plan domain.BuildPlan, createdAt string) (string, error) {
+	if err := domain.ValidateBuildPlan(plan); err != nil {
+		return "", err
+	}
 	payload, err := json.Marshal(plan)
 	if err != nil {
 		return "", err

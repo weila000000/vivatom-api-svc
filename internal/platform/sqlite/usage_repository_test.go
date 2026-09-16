@@ -170,6 +170,25 @@ func TestUsageServiceRequiresExactlyOneActionResult(t *testing.T) {
 	if err = database.QueryRow(`SELECT count(*) FROM approved_plans`).Scan(&plans); err != nil || plans != 0 {
 		t.Fatalf("duplicate result persisted plans=%d err=%v", plans, err)
 	}
+
+	invalid := usage.NewService(identityService, scriptedRunner{{Type: "approval.required", Plan: &domain.BuildPlan{}}, {Type: "done"}}, repository)
+	events, err = invalid.Run(ctx, owner.Session.Token, owner.Workspaces[0].ID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received = nil
+	for event := range events {
+		received = append(received, event.Type+":"+event.Code)
+	}
+	if strings.Join(received, ",") != "error:plan_rejected,done:" {
+		t.Fatalf("invalid plan events = %v", received)
+	}
+	if err = database.QueryRow(`SELECT count(*) FROM approved_plans`).Scan(&plans); err != nil || plans != 0 {
+		t.Fatalf("invalid plan persisted plans=%d err=%v", plans, err)
+	}
+	if _, err = repository.StorePlan(ctx, owner.Workspaces[0].ID, owner.User.ID, "project-1", "invalid", domain.BuildPlan{}, "2026-01-01T00:00:00Z"); err == nil {
+		t.Fatal("repository accepted an invalid plan")
+	}
 }
 
 func TestCompleteUsageAppendsOneTerminalAuditEvent(t *testing.T) {

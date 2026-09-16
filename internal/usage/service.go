@@ -210,7 +210,23 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		}
 		if status == "succeeded" && deliverable != nil {
 			event := *deliverable
+			var contractErr error
 			if event.Type == "approval.required" {
+				contractErr = domain.ValidateBuildPlan(*event.Plan)
+			} else if request.Action == domain.ActionBuild {
+				contractErr = domain.ValidateBuildContract(*request.Plan, *event.Snapshot)
+			} else {
+				contractErr = domain.ValidateRevisionContract(*request.Snapshot, *event.Snapshot)
+			}
+			if contractErr != nil {
+				status = "failed"
+				resultCode = "contract_rejected"
+				if event.Type == "approval.required" {
+					resultCode = "plan_rejected"
+				}
+				event = domain.AgentEvent{Type: "error", Code: resultCode, Message: "Agent 结果不符合领域契约", Retryable: true}
+			}
+			if status == "succeeded" && event.Type == "approval.required" {
 				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, request.Prompt, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
 				if err != nil {
 					status = "failed"
@@ -219,7 +235,7 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 				} else {
 					event.ApprovalID = approvalID
 				}
-			} else {
+			} else if status == "succeeded" {
 				candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, request.Prompt, *event.Snapshot, s.now().UTC().Format(time.RFC3339Nano))
 				if err != nil {
 					status = "failed"
