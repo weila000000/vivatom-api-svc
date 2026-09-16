@@ -97,6 +97,9 @@ func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accou
 		return "", "", err
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, workspaceID, accountID, projectID); err != nil {
+		return "", "", err
+	}
 	var id string
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at)
@@ -228,6 +231,9 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	}
 	if member == 0 {
 		return nil, usage.ResultForbidden, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, workspaceID, accountID, projectID); err != nil {
+		return nil, "", err
 	}
 	var snapshotJSON, snapshotHash, safetyPolicy, safetyVerifiedAt string
 	if err = tx.QueryRowContext(ctx, `SELECT v.snapshot_json,v.snapshot_hash,s.policy,s.verified_at FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash JOIN safety_verifications s ON s.candidate_id=v.candidate_id AND s.snapshot_hash=v.snapshot_hash WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, versionID, workspaceID, projectID).Scan(&snapshotJSON, &snapshotHash, &safetyPolicy, &safetyVerifiedAt); err == sql.ErrNoRows {

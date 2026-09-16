@@ -259,6 +259,32 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			assertUsageCode(t, retryConflictErr, "candidate_invalid")
 		}
 	}
+	var usageID string
+	if err = database.QueryRow(`SELECT usage_id FROM build_candidates WHERE project_id='p1' ORDER BY created_at DESC LIMIT 1`).Scan(&usageID); err != nil {
+		t.Fatal(err)
+	}
+	replacementSnapshot, err := provider.Build(ctx, "replacement", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	supersededID, _, err := repository.StoreCandidate(ctx, workspaceID, owner.User.ID, "p1", usageID, "replacement", replacementSnapshot, "2026-01-01T00:20:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestID, _, err := repository.StoreCandidate(ctx, workspaceID, owner.User.ID, "p1", usageID, "replacement", replacementSnapshot, "2026-01-01T00:21:00Z")
+	if err != nil || latestID == supersededID {
+		t.Fatalf("store replacement candidate: latest=%q superseded=%q err=%v", latestID, supersededID, err)
+	}
+	var supersededStatus, latestStatus string
+	if err = database.QueryRow(`SELECT status FROM build_candidates WHERE id=?`, supersededID).Scan(&supersededStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.QueryRow(`SELECT status FROM build_candidates WHERE id=?`, latestID).Scan(&latestStatus); err != nil {
+		t.Fatal(err)
+	}
+	if supersededStatus != "rejected" || latestStatus != "pending" {
+		t.Fatalf("candidate replacement statuses: superseded=%q latest=%q", supersededStatus, latestStatus)
+	}
 	events, err := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "p1", Prompt: "plan"})
 	if err != nil {
 		t.Fatal(err)
