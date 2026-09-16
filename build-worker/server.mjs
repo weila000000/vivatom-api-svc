@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
 import { constants, createReadStream } from "node:fs"
-import { access, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { access, mkdtemp, mkdir, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { dirname, extname, join, relative, resolve, sep } from "node:path"
@@ -10,6 +10,9 @@ const port = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
 const token = process.env.VIVATOM_BUILDER_TOKEN || "vivatom-local-builder"
 const maxBodyBytes = 2.25 * 1024 * 1024
 const maxOutputBytes = 64 * 1024
+const maxArtifactFiles = 128
+const maxArtifactFileBytes = 4 * 1024 * 1024
+const maxArtifactBytes = 8 * 1024 * 1024
 const timeoutMs = 45_000
 const toolchain = "vite@7.3.6+vue@3.5.42"
 const maxConcurrentBuilds = Number(process.env.VIVATOM_BUILDER_CONCURRENCY || 2)
@@ -59,8 +62,11 @@ async function checkReady() {
   ])
 }
 
-async function hashArtifact(root) {
+async function inspectArtifact(root) {
   const hash = createHash("sha256")
+  let fileCount = 0
+  let totalBytes = 0
+  let hasIndex = false
   async function visit(directory) {
     const entries = await readdir(directory, { withFileTypes: true })
     entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
@@ -72,27 +78,42 @@ async function hashArtifact(root) {
       }
       if (!entry.isFile()) throw new Error("invalid_artifact")
       const artifactPath = relative(root, path).split(sep).join("/")
-      const content = await readFile(path)
+      const metadata = await stat(path)
+      fileCount++
+      totalBytes += metadata.size
+      if (fileCount > maxArtifactFiles) throw new Error("artifact_too_many_files")
+      if (metadata.size > maxArtifactFileBytes) throw new Error("artifact_file_too_large")
+      if (totalBytes > maxArtifactBytes) throw new Error("artifact_too_large")
+      if (artifactPath === "index.html") hasIndex = true
       hash.update(`${Buffer.byteLength(artifactPath)}:`)
       hash.update(artifactPath)
-      hash.update(`${content.length}:`)
-      hash.update(content)
+      hash.update(`${metadata.size}:`)
+      let streamedBytes = 0
+      for await (const chunk of createReadStream(path)) {
+        streamedBytes += chunk.length
+        if (streamedBytes > metadata.size) throw new Error("artifact_changed_during_hash")
+        hash.update(chunk)
+      }
+      if (streamedBytes !== metadata.size) throw new Error("artifact_changed_during_hash")
     }
   }
   await visit(root)
-  return hash.digest("hex")
+  if (!hasIndex) throw new Error("artifact_entry_missing")
+  return { artifactId: hash.digest("hex"), fileCount, totalBytes }
 }
 
-async function persistArtifact(source, artifactId, requestId) {
+async function persistArtifact(source, artifact, requestId) {
+  const { artifactId, fileCount, totalBytes } = artifact
   await mkdir(artifactRoot, { recursive: true })
   const destination = join(artifactRoot, artifactId)
   try {
     await rename(source, destination)
-    log("info", "artifact_persisted", { requestId, artifactId })
+    log("info", "artifact_persisted", { requestId, artifactId, fileCount, totalBytes })
   } catch (error) {
     if (error?.code !== "EEXIST" && error?.code !== "ENOTEMPTY") throw error
-    if (await hashArtifact(destination) !== artifactId) throw new Error("artifact_integrity_mismatch")
-    log("info", "artifact_reused", { requestId, artifactId })
+    const existing = await inspectArtifact(destination)
+    if (existing.artifactId !== artifactId) throw new Error("artifact_integrity_mismatch")
+    log("info", "artifact_reused", { requestId, artifactId, fileCount: existing.fileCount, totalBytes: existing.totalBytes })
   }
 }
 
@@ -100,7 +121,9 @@ async function verifyArtifact(artifactId) {
   if (!/^[a-f0-9]{64}$/.test(artifactId)) throw new Error("invalid_artifact_id")
   const root = join(artifactRoot, artifactId)
   if (!(await stat(root)).isDirectory()) throw new Error("artifact_not_found")
-  if (await hashArtifact(root) !== artifactId) throw new Error("artifact_integrity_mismatch")
+  const artifact = await inspectArtifact(root)
+  if (artifact.artifactId !== artifactId) throw new Error("artifact_integrity_mismatch")
+  return artifact
 }
 
 async function compile(snapshot, snapshotHash, requestId) {
@@ -128,9 +151,9 @@ async function compile(snapshot, snapshotHash, requestId) {
     }
     await runVite(canonicalDirectory, canonicalDirectory, snapshot.entryFile, requestId)
     const dist = join(directory, "dist")
-    const artifactId = await hashArtifact(dist)
-    await persistArtifact(dist, artifactId, requestId)
-    return artifactId
+    const artifact = await inspectArtifact(dist)
+    await persistArtifact(dist, artifact, requestId)
+    return artifact.artifactId
   } finally {
     await rm(directory, { recursive: true, force: true })
     log("info", "workspace_removed", { requestId })
@@ -273,9 +296,9 @@ const server = createServer(async (request, response) => {
   try {
     const body = await readJSON(request)
     if (request.url === "/verify") {
-      await verifyArtifact(body.artifactId)
+      const artifact = await verifyArtifact(body.artifactId)
       response.writeHead(204).end()
-      log("info", "artifact_verified", { requestId, artifactId: body.artifactId, durationMs: Date.now() - requestStartedAt })
+      log("info", "artifact_verified", { requestId, artifactId: body.artifactId, fileCount: artifact.fileCount, totalBytes: artifact.totalBytes, durationMs: Date.now() - requestStartedAt })
       return
     }
     const startedAt = Date.now()
@@ -297,7 +320,7 @@ const server = createServer(async (request, response) => {
     }
   }
 }).listen(port, "0.0.0.0", () => {
-  log("info", "builder_started", { port, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, timeoutMs, maxConcurrentBuilds })
+  log("info", "builder_started", { port, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, maxArtifactFiles, maxArtifactFileBytes, maxArtifactBytes, timeoutMs, maxConcurrentBuilds })
 })
 
 server.on("clientError", (error, socket) => {
