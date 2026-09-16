@@ -80,6 +80,13 @@ async function persistArtifact(source, artifactId, requestId) {
   }
 }
 
+async function verifyArtifact(artifactId) {
+  if (!/^[a-f0-9]{64}$/.test(artifactId)) throw new Error("invalid_artifact_id")
+  const root = join(artifactRoot, artifactId)
+  if (!(await stat(root)).isDirectory()) throw new Error("artifact_not_found")
+  if (await hashArtifact(root) !== artifactId) throw new Error("artifact_integrity_mismatch")
+}
+
 async function compile(snapshot, snapshotHash, requestId) {
   if (!snapshot || !safePath(snapshot.entryFile) || !snapshot.files || snapshot.dependencies?.vue !== "3.5.42") {
     throw new Error("invalid_snapshot")
@@ -218,7 +225,7 @@ const server = createServer(async (request, response) => {
     log("info", "preview_served", { requestId, path: pathname, durationMs: Date.now() - requestStartedAt })
     return
   }
-  if (request.method !== "POST" || request.url !== "/compile") {
+  if (request.method !== "POST" || (request.url !== "/compile" && request.url !== "/verify")) {
     response.writeHead(404).end()
     log("info", "request_completed", { requestId, status: 404, durationMs: Date.now() - requestStartedAt })
     return
@@ -230,6 +237,12 @@ const server = createServer(async (request, response) => {
   }
   try {
     const body = await readJSON(request)
+    if (request.url === "/verify") {
+      await verifyArtifact(body.artifactId)
+      response.writeHead(204).end()
+      log("info", "artifact_verified", { requestId, artifactId: body.artifactId, durationMs: Date.now() - requestStartedAt })
+      return
+    }
     const startedAt = Date.now()
     const artifactId = await compile(body.snapshot, body.snapshotHash, requestId)
     const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt, artifactId } })
@@ -237,8 +250,10 @@ const server = createServer(async (request, response) => {
     log("info", "request_completed", { requestId, status: 200, durationMs: Date.now() - requestStartedAt, toolchain })
   } catch (error) {
     const diagnostic = sanitizeDiagnostic(error)
-    log("error", "compile_failed", { requestId, status: 422, durationMs: Date.now() - requestStartedAt, error: diagnostic })
-    const payload = JSON.stringify({ error: "compile_failed", diagnostic })
+    const verifying = request.url === "/verify"
+    const errorCode = verifying ? "artifact_unavailable" : "compile_failed"
+    log("error", verifying ? "artifact_verification_failed" : "compile_failed", { requestId, status: 422, durationMs: Date.now() - requestStartedAt, error: diagnostic })
+    const payload = JSON.stringify({ error: errorCode, diagnostic })
     response.writeHead(422, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
   }
 }).listen(port, "0.0.0.0", () => {

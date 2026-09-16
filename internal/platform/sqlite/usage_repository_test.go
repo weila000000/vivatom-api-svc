@@ -150,23 +150,32 @@ func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
 	}
 }
 
-type acceptingCompiler struct{ calls int }
+type acceptingCompiler struct {
+	calls       int
+	verifyError error
+}
 
 func (c *acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
 	c.calls++
-	return domain.BuildVerification{Toolchain: "test-compiler", DurationMS: 10}, nil
+	return domain.BuildVerification{Toolchain: "test-compiler", DurationMS: 10, ArtifactID: strings.Repeat("a", 64)}, nil
 }
+
+func (c *acceptingCompiler) VerifyArtifact(context.Context, string) error { return c.verifyError }
 
 type rejectingCompiler struct{}
 
 func (rejectingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
 	return domain.BuildVerification{}, rejectedCompileError{}
 }
+func (rejectingCompiler) VerifyArtifact(context.Context, string) error { return nil }
 
 type unavailableCompiler struct{}
 
 func (unavailableCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
 	return domain.BuildVerification{}, errors.New("worker offline")
+}
+func (unavailableCompiler) VerifyArtifact(context.Context, string) error {
+	return errors.New("worker offline")
 }
 
 type rejectedCompileError struct{}
@@ -242,6 +251,13 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if err = database.QueryRow(`SELECT toolchain,duration_ms,verified_at FROM build_verifications WHERE candidate_id=? AND snapshot_hash=?`, candidateID, snapshotHash).Scan(&toolchain, &durationMS, &verifiedAt); err != nil || toolchain != "test-compiler" || durationMS != 10 || verifiedAt == "" {
 				t.Fatalf("verification was not persisted: toolchain=%q duration=%d verifiedAt=%q err=%v", toolchain, durationMS, verifiedAt, err)
 			}
+			compiler.verifyError = errors.New("artifact missing")
+			if _, artifactErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build"); artifactErr == nil {
+				t.Fatal("expected missing artifact to block version reuse")
+			} else {
+				assertUsageCode(t, artifactErr, "artifact_unavailable")
+			}
+			compiler.verifyError = nil
 			retried, retryErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
 			if retryErr != nil || retried.ID != version.ID {
 				t.Fatalf("idempotent commit: version=%+v err=%v", retried, retryErr)
@@ -308,7 +324,8 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if _, result, verificationErr := repository.RecordVerification(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, takeoverLease, domain.BuildVerification{Toolchain: "recovered-compiler", DurationMS: 12}, "2026-01-01T00:10:00Z"); verificationErr != nil || result != usage.ResultOK {
 				t.Fatalf("record interrupted verification: result=%q err=%v", result, verificationErr)
 			}
-			resumeService := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, nil)
+			resumeCompiler := &acceptingCompiler{}
+			resumeService := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, resumeCompiler)
 			recoveredVersion, resumeErr := resumeService.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, committedVersionID, "build")
 			if resumeErr != nil || recoveredVersion.Build == nil || recoveredVersion.Build.Toolchain != "recovered-compiler" {
 				t.Fatalf("resume verified candidate: version=%+v err=%v", recoveredVersion, resumeErr)
@@ -316,6 +333,9 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			committedVersionID = recoveredVersion.ID
 			if err = database.QueryRow(`SELECT count(*) FROM build_attempts WHERE candidate_id=? AND result_code='compiler_unavailable'`, candidateID).Scan(&unavailableAttempts); err != nil || unavailableAttempts != 1 {
 				t.Fatalf("resume repeated worker call: count=%d err=%v", unavailableAttempts, err)
+			}
+			if resumeCompiler.calls != 0 {
+				t.Fatalf("resume recompiled verified candidate %d times", resumeCompiler.calls)
 			}
 		}
 		if index == 2 {

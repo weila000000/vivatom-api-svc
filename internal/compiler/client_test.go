@@ -62,6 +62,34 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 	}
 }
 
+func TestClientVerifiesPersistedArtifact(t *testing.T) {
+	artifactID := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/verify" || request.Header.Get("X-Vivatom-Builder-Token") != "builder-secret" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body struct {
+			ArtifactID string `json:"artifactId"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.ArtifactID != artifactID {
+			t.Fatalf("artifact id = %q", body.ArtifactID)
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := NewClient(server.URL, "builder-secret", time.Second).VerifyArtifact(context.Background(), artifactID); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewClient(server.URL, "builder-secret", time.Second).VerifyArtifact(context.Background(), "invalid"); err == nil {
+		t.Fatal("expected invalid artifact id to be rejected")
+	}
+}
+
 func TestClientChecksBuilderReadiness(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != "/health" {

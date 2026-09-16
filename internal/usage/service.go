@@ -18,6 +18,7 @@ type Runner interface {
 }
 type Compiler interface {
 	Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error)
+	VerifyArtifact(context.Context, string) error
 }
 
 type rejectedCompilation interface {
@@ -234,6 +235,10 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 		}
 		if result == ResultCandidateInvalid || storedVerification == nil {
 			return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
+		}
+	} else {
+		if s.compiler == nil || s.compiler.VerifyArtifact(ctx, storedVerification.ArtifactID) != nil {
+			return Version{}, &Error{Code: "artifact_unavailable", Status: http.StatusServiceUnavailable}
 		}
 	}
 	version, result, err := s.repository.CommitCandidate(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, parentVersionID, prompt, s.now().UTC().Format(time.RFC3339Nano))

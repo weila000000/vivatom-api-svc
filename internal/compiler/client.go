@@ -98,3 +98,31 @@ func (c *Client) Compile(ctx context.Context, snapshot domain.ProjectSnapshot) (
 	}
 	return envelope.Data, nil
 }
+
+func (c *Client) VerifyArtifact(ctx context.Context, artifactID string) error {
+	if !artifactIDPattern.MatchString(artifactID) {
+		return fmt.Errorf("invalid artifact id")
+	}
+	payload, err := json.Marshal(struct {
+		ArtifactID string `json:"artifactId"`
+	}{ArtifactID: artifactID})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url+"/verify", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Vivatom-Builder-Token", c.token)
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("artifact verification returned status %d", response.StatusCode)
+	}
+	return nil
+}
