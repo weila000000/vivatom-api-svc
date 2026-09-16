@@ -50,6 +50,25 @@ func TestSnapshotMetadataAppliesToBuildsAndRevisions(t *testing.T) {
 	assertContractCode(t, ValidateRevisionContract(previous, candidate), "snapshot.summary_too_long")
 }
 
+func TestSnapshotContractRequiresRuntimeSDKUsage(t *testing.T) {
+	backend := BackendSpec{Enabled: true, Auth: "none"}
+	plan := BuildPlan{Backend: backend}
+	snapshot := ProjectSnapshot{
+		Title: "Task", Summary: "Board", Backend: backend,
+		Files: map[string]string{
+			"/src/App.vue":            `<template><main>Task</main></template>`,
+			"/src/vivatom-runtime.ts": `export const vivatomRuntime = {}`,
+		},
+	}
+	assertContractCode(t, ValidateBuildContract(plan, snapshot), "snapshot.runtime_not_integrated")
+	snapshot.Files["/src/App.vue"] = `<script setup lang="ts">import { vivatomRuntime } from "./vivatom-runtime"</script><template><main>Task</main></template>`
+	if err := ValidateBuildContract(plan, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	delete(snapshot.Files, "/src/vivatom-runtime.ts")
+	assertContractCode(t, ValidateRevisionContract(snapshot, snapshot), "snapshot.runtime_sdk_missing")
+}
+
 func assertContractCode(t *testing.T, err error, want string) {
 	t.Helper()
 	value, ok := err.(*ContractError)

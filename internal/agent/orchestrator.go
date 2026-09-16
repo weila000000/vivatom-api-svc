@@ -5,6 +5,7 @@ import (
 
 	"vivatom-api-svc/internal/ai"
 	"vivatom-api-svc/internal/domain"
+	"vivatom-api-svc/internal/generation"
 )
 
 type Orchestrator struct {
@@ -62,6 +63,7 @@ func (o *Orchestrator) runRevision(ctx context.Context, request domain.AgentRequ
 		o.sendProviderFailure(ctx, send, err)
 		return
 	}
+	snapshot = generation.InjectRuntimeSDK(snapshot, request.ProjectID)
 	if err = domain.ValidateRevisionContract(*request.Snapshot, snapshot); err != nil {
 		o.sendFailure(ctx, send, "contract_rejected", "候选源码偏离当前版本的数据契约。")
 		return
@@ -156,6 +158,7 @@ func (o *Orchestrator) runBuild(ctx context.Context, request domain.AgentRequest
 		o.sendProviderFailure(ctx, send, err)
 		return
 	}
+	snapshot = generation.InjectRuntimeSDK(snapshot, request.ProjectID)
 	if !send(domain.AgentEvent{Type: "action.status", ID: "frontend", Agent: "bob", Action: "generate_frontend", Status: "completed", Label: "前端源码已生成"}) ||
 		!send(domain.AgentEvent{Type: "action.status", ID: "backend", Agent: "lin", Action: "generate_backend", Status: "completed", Label: "Runtime 数据契约已生成"}) ||
 		!send(domain.AgentEvent{Type: "agent.started", Agent: "sam", Message: "正在审查源码完整性和安全边界"}) ||
