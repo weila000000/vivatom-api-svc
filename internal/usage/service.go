@@ -30,6 +30,7 @@ type Repository interface {
 	CommitCandidate(context.Context, string, string, string, string, string, string, string, string) (*Version, Result, error)
 	LoadCandidate(context.Context, string, string, string, string, string, string) (*domain.ProjectSnapshot, Result, error)
 	RecordVerification(context.Context, string, string, string, string, string, domain.BuildVerification, string) (*domain.BuildVerification, Result, error)
+	RecordBuildFailure(context.Context, string, string, string, string, string, string, string) (Result, error)
 	RestageVersion(context.Context, string, string, string, string, string) (*Candidate, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
@@ -178,10 +179,21 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	}
 	verification, err := s.compiler.Compile(ctx, *snapshot)
 	if err != nil {
+		resultCode := "compiler_unavailable"
 		if rejected, ok := err.(rejectedCompilation); ok && rejected.CompileRejected() {
-			return Version{}, &Error{Code: "compile_failed", Status: http.StatusUnprocessableEntity}
+			resultCode = "compile_failed"
 		}
-		return Version{}, &Error{Code: "compiler_unavailable", Status: http.StatusServiceUnavailable}
+		recorded, recordErr := s.repository.RecordBuildFailure(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, resultCode, s.now().UTC().Format(time.RFC3339Nano))
+		if recordErr != nil {
+			return Version{}, unavailable()
+		}
+		if recorded == ResultCandidateInvalid {
+			return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
+		}
+		if resultCode == "compile_failed" {
+			return Version{}, &Error{Code: resultCode, Status: http.StatusUnprocessableEntity}
+		}
+		return Version{}, &Error{Code: resultCode, Status: http.StatusServiceUnavailable}
 	}
 	storedVerification, result, err := s.repository.RecordVerification(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, verification, s.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {

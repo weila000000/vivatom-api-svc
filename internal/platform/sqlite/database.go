@@ -194,6 +194,20 @@ func migrate(db *sql.DB) error {
 			verified_at TEXT NOT NULL,
 			FOREIGN KEY(candidate_id) REFERENCES build_candidates(id) ON DELETE CASCADE
 		);
+		CREATE TABLE IF NOT EXISTS build_attempts (
+			id TEXT PRIMARY KEY,
+			candidate_id TEXT NOT NULL,
+			snapshot_hash TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('passed','failed')),
+			result_code TEXT NOT NULL,
+			toolchain TEXT,
+			duration_ms INTEGER,
+			attempted_at TEXT NOT NULL,
+			FOREIGN KEY(candidate_id) REFERENCES build_candidates(id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS build_attempts_candidate ON build_attempts(candidate_id, attempted_at DESC);
+		INSERT OR IGNORE INTO build_attempts (id,candidate_id,snapshot_hash,status,result_code,toolchain,duration_ms,attempted_at)
+			SELECT 'legacy:'||candidate_id,candidate_id,snapshot_hash,'passed','legacy_success',toolchain,duration_ms,verified_at FROM build_verifications;
 		CREATE TABLE IF NOT EXISTS immutable_versions (
 			id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,

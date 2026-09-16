@@ -72,7 +72,12 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 }
 
 func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string, verification domain.BuildVerification, verifiedAt string) (*domain.BuildVerification, usage.Result, error) {
-	result, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,verified_at)
 		SELECT id,?,?,?,? FROM build_candidates
 		WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status IN ('pending','committed')
@@ -84,14 +89,45 @@ func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, wor
 		return nil, "", err
 	}
 	var stored domain.BuildVerification
-	err = r.db.QueryRowContext(ctx, `SELECT toolchain,duration_ms,verified_at FROM build_verifications WHERE candidate_id=? AND snapshot_hash=?`, candidateID, snapshotHash).Scan(&stored.Toolchain, &stored.DurationMS, &stored.VerifiedAt)
+	err = tx.QueryRowContext(ctx, `SELECT toolchain,duration_ms,verified_at FROM build_verifications WHERE candidate_id=? AND snapshot_hash=?`, candidateID, snapshotHash).Scan(&stored.Toolchain, &stored.DurationMS, &stored.VerifiedAt)
 	if err == sql.ErrNoRows {
 		return nil, usage.ResultCandidateInvalid, nil
 	}
 	if err != nil {
 		return nil, "", err
 	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO build_attempts (id,candidate_id,snapshot_hash,status,result_code,toolchain,duration_ms,attempted_at) VALUES (lower(hex(randomblob(16))),?,?,'passed','compile_passed',?,?,?)`, candidateID, snapshotHash, verification.Toolchain, verification.DurationMS, verifiedAt); err != nil {
+		return nil, "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, "", err
+	}
 	return &stored, usage.ResultOK, nil
+}
+
+func (r *UsageRepository) RecordBuildFailure(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, resultCode, attemptedAt string) (usage.Result, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var candidate int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status='pending'`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&candidate); err != nil {
+		return "", err
+	}
+	if candidate != 1 {
+		return usage.ResultCandidateInvalid, nil
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO build_attempts (id,candidate_id,snapshot_hash,status,result_code,attempted_at) VALUES (lower(hex(randomblob(16))),?,?,'failed',?,?)`, candidateID, snapshotHash, resultCode, attemptedAt); err != nil {
+		return "", err
+	}
+	if err = appendAudit(ctx, tx, workspaceID, accountID, "candidate.compile_failed", "project", projectID, attemptedAt, map[string]any{"candidateId": candidateID, "snapshotHash": snapshotHash, "resultCode": resultCode}); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return usage.ResultOK, nil
 }
 
 func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspaceID, projectID, versionID, createdAt string) (*usage.Candidate, usage.Result, error) {

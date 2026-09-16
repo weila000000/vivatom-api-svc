@@ -65,6 +65,12 @@ func (rejectingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domai
 	return domain.BuildVerification{}, rejectedCompileError{}
 }
 
+type unavailableCompiler struct{}
+
+func (unavailableCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
+	return domain.BuildVerification{}, errors.New("worker offline")
+}
+
 type rejectedCompileError struct{}
 
 func (rejectedCompileError) Error() string         { return "compile failed" }
@@ -170,6 +176,21 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			}
 			if err = database.QueryRow(`SELECT count(*) FROM immutable_versions WHERE candidate_id=?`, candidateID).Scan(&versionCount); err != nil || versionCount != 0 {
 				t.Fatalf("failed build created version: count=%d err=%v", versionCount, err)
+			}
+			var attemptCode string
+			if err = database.QueryRow(`SELECT result_code FROM build_attempts WHERE candidate_id=? AND status='failed'`, candidateID).Scan(&attemptCode); err != nil || attemptCode != "compile_failed" {
+				t.Fatalf("failed build attempt: code=%q err=%v", attemptCode, err)
+			}
+			var auditCode string
+			if err = database.QueryRow(`SELECT json_extract(metadata_json,'$.resultCode') FROM audit_events WHERE action='candidate.compile_failed' AND json_extract(metadata_json,'$.candidateId')=?`, candidateID).Scan(&auditCode); err != nil || auditCode != "compile_failed" {
+				t.Fatalf("failed build audit: code=%q err=%v", auditCode, err)
+			}
+			unavailableService := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, unavailableCompiler{})
+			_, unavailableErr := unavailableService.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
+			assertUsageCode(t, unavailableErr, "compiler_unavailable")
+			var unavailableAttempts int
+			if err = database.QueryRow(`SELECT count(*) FROM build_attempts WHERE candidate_id=? AND result_code='compiler_unavailable'`, candidateID).Scan(&unavailableAttempts); err != nil || unavailableAttempts != 1 {
+				t.Fatalf("unavailable build attempt: count=%d err=%v", unavailableAttempts, err)
 			}
 		}
 		if index == 2 {
