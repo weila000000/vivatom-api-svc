@@ -178,6 +178,18 @@ func (unavailableCompiler) VerifyArtifact(context.Context, string) error {
 	return errors.New("worker offline")
 }
 
+type busyCompiler struct{}
+
+func (busyCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
+	return domain.BuildVerification{}, busyCompileError{}
+}
+func (busyCompiler) VerifyArtifact(context.Context, string) error { return nil }
+
+type busyCompileError struct{}
+
+func (busyCompileError) Error() string     { return "builder busy" }
+func (busyCompileError) CompileBusy() bool { return true }
+
 type rejectedCompileError struct{}
 
 func (rejectedCompileError) Error() string         { return "compile failed" }
@@ -309,6 +321,13 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			var unavailableAttempts int
 			if err = database.QueryRow(`SELECT count(*) FROM build_attempts WHERE candidate_id=? AND result_code='compiler_unavailable'`, candidateID).Scan(&unavailableAttempts); err != nil || unavailableAttempts != 1 {
 				t.Fatalf("unavailable build attempt: count=%d err=%v", unavailableAttempts, err)
+			}
+			busyService := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, busyCompiler{})
+			_, busyErr := busyService.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
+			assertUsageCode(t, busyErr, "compile_busy")
+			var busyAttempts int
+			if err = database.QueryRow(`SELECT count(*) FROM build_attempts WHERE candidate_id=? AND result_code='compile_busy'`, candidateID).Scan(&busyAttempts); err != nil || busyAttempts != 1 {
+				t.Fatalf("busy build attempt: count=%d err=%v", busyAttempts, err)
 			}
 			leaseID, claimResult, claimErr := repository.ClaimCompilation(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, "2026-01-01T00:05:00Z", "2026-01-01T00:06:00Z")
 			if claimErr != nil || claimResult != usage.ResultOK || leaseID == "" {

@@ -24,6 +24,9 @@ type Compiler interface {
 type rejectedCompilation interface {
 	CompileRejected() bool
 }
+type busyCompilation interface {
+	CompileBusy() bool
+}
 type Repository interface {
 	Reserve(context.Context, string, string, string, string, int, string) (string, Result, error)
 	StorePlan(context.Context, string, string, string, string, domain.BuildPlan, string) (string, error)
@@ -216,6 +219,8 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 			if rejected, ok := compileErr.(rejectedCompilation); ok && rejected.CompileRejected() {
 				resultCode = "compile_failed"
 				diagnostic = strings.TrimSpace(compileErr.Error())
+			} else if busy, ok := compileErr.(busyCompilation); ok && busy.CompileBusy() {
+				resultCode = "compile_busy"
 			}
 			recorded, recordErr := s.repository.RecordBuildFailure(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, leaseID, resultCode, s.now().UTC().Format(time.RFC3339Nano))
 			if recordErr != nil {
@@ -226,6 +231,9 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 			}
 			if resultCode == "compile_failed" {
 				return Version{}, &Error{Code: resultCode, Status: http.StatusUnprocessableEntity, Message: diagnostic}
+			}
+			if resultCode == "compile_busy" {
+				return Version{}, &Error{Code: resultCode, Status: http.StatusServiceUnavailable}
 			}
 			return Version{}, &Error{Code: resultCode, Status: http.StatusServiceUnavailable}
 		}

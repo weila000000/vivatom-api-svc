@@ -62,6 +62,20 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 	}
 }
 
+func TestClientReportsBusyBuilder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(writer, `{"error":"builder_busy"}`)
+	}))
+	defer server.Close()
+
+	_, err := NewClient(server.URL, "secret", time.Second).Compile(context.Background(), domain.ProjectSnapshot{})
+	busy, ok := err.(BusyError)
+	if !ok || !busy.CompileBusy() {
+		t.Fatalf("expected busy error, got %T %v", err, err)
+	}
+}
+
 func TestClientVerifiesPersistedArtifact(t *testing.T) {
 	artifactID := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

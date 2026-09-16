@@ -34,6 +34,11 @@ func (e RejectedError) Error() string {
 }
 func (RejectedError) CompileRejected() bool { return true }
 
+type BusyError struct{}
+
+func (BusyError) Error() string     { return "builder busy" }
+func (BusyError) CompileBusy() bool { return true }
+
 func NewClient(url, token string, timeout time.Duration) *Client {
 	return &Client{url: strings.TrimRight(url, "/"), token: token, httpClient: &http.Client{Timeout: timeout}}
 }
@@ -84,6 +89,10 @@ func (c *Client) Compile(ctx context.Context, snapshot domain.ProjectSnapshot) (
 		}
 		_ = json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&failure)
 		return domain.BuildVerification{}, RejectedError{Diagnostic: strings.TrimSpace(failure.Diagnostic)}
+	}
+	if response.StatusCode == http.StatusServiceUnavailable {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
+		return domain.BuildVerification{}, BusyError{}
 	}
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))

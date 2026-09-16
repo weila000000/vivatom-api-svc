@@ -12,8 +12,14 @@ const maxBodyBytes = 2.25 * 1024 * 1024
 const maxOutputBytes = 64 * 1024
 const timeoutMs = 45_000
 const toolchain = "vite@7.3.6+vue@3.5.42"
+const maxConcurrentBuilds = Number(process.env.VIVATOM_BUILDER_CONCURRENCY || 2)
 const workerRoot = dirname(new URL(import.meta.url).pathname)
 const artifactRoot = resolve(process.env.VIVATOM_ARTIFACT_ROOT || join(workerRoot, ".data", "artifacts"))
+let activeBuilds = 0
+
+if (!Number.isInteger(maxConcurrentBuilds) || maxConcurrentBuilds < 1 || maxConcurrentBuilds > 16) {
+  throw new Error("VIVATOM_BUILDER_CONCURRENCY must be an integer between 1 and 16")
+}
 
 function log(level, event, fields = {}) {
   const line = JSON.stringify({ time: new Date().toISOString(), level, event, ...fields })
@@ -236,6 +242,18 @@ const server = createServer(async (request, response) => {
     log("error", "request_rejected", { requestId, status: 401, reason: "invalid_token", durationMs: Date.now() - requestStartedAt })
     return
   }
+  const compiling = request.url === "/compile"
+  if (compiling && activeBuilds >= maxConcurrentBuilds) {
+    request.resume()
+    const payload = JSON.stringify({ error: "builder_busy" })
+    response.writeHead(503, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), "Retry-After": "1" }).end(payload)
+    log("error", "compile_rejected", { requestId, status: 503, reason: "builder_busy", activeBuilds, maxConcurrentBuilds, durationMs: Date.now() - requestStartedAt })
+    return
+  }
+  if (compiling) {
+    activeBuilds++
+    log("info", "build_slot_acquired", { requestId, activeBuilds, maxConcurrentBuilds })
+  }
   try {
     const body = await readJSON(request)
     if (request.url === "/verify") {
@@ -256,9 +274,14 @@ const server = createServer(async (request, response) => {
     log("error", verifying ? "artifact_verification_failed" : "compile_failed", { requestId, status: 422, durationMs: Date.now() - requestStartedAt, error: diagnostic })
     const payload = JSON.stringify({ error: errorCode, diagnostic })
     response.writeHead(422, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
+  } finally {
+    if (compiling) {
+      activeBuilds--
+      log("info", "build_slot_released", { requestId, activeBuilds, maxConcurrentBuilds })
+    }
   }
 }).listen(port, "0.0.0.0", () => {
-  log("info", "builder_started", { port, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, timeoutMs })
+  log("info", "builder_started", { port, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, timeoutMs, maxConcurrentBuilds })
 })
 
 server.on("clientError", (error, socket) => {
