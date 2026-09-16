@@ -34,12 +34,13 @@ type Candidate struct {
 type Result string
 
 const (
-	ResultOK               Result = "ok"
-	ResultForbidden        Result = "forbidden"
-	ResultExhausted        Result = "exhausted"
-	ResultApprovalInvalid  Result = "approval_invalid"
-	ResultCandidateInvalid Result = "candidate_invalid"
-	ResultVersionConflict  Result = "version_conflict"
+	ResultOK                Result = "ok"
+	ResultForbidden         Result = "forbidden"
+	ResultExhausted         Result = "exhausted"
+	ResultApprovalInvalid   Result = "approval_invalid"
+	ResultCandidateInvalid  Result = "candidate_invalid"
+	ResultCompileInProgress Result = "compile_in_progress"
+	ResultVersionConflict   Result = "version_conflict"
 )
 
 type Error struct {

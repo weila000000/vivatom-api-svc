@@ -178,6 +178,12 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY(account_id) REFERENCES tenant_accounts(id)
 		);
 		CREATE INDEX IF NOT EXISTS build_candidates_project ON build_candidates(workspace_id, project_id, created_at DESC);
+		CREATE TABLE IF NOT EXISTS candidate_compile_leases (
+			candidate_id TEXT PRIMARY KEY,
+			lease_id TEXT NOT NULL UNIQUE,
+			expires_at TEXT NOT NULL,
+			FOREIGN KEY(candidate_id) REFERENCES build_candidates(id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS safety_verifications (
 			candidate_id TEXT PRIMARY KEY,
 			snapshot_hash TEXT NOT NULL,

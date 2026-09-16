@@ -97,6 +97,9 @@ func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accou
 		return "", "", err
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM candidate_compile_leases WHERE candidate_id IN (SELECT id FROM build_candidates WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending')`, workspaceID, accountID, projectID); err != nil {
+		return "", "", err
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, workspaceID, accountID, projectID); err != nil {
 		return "", "", err
 	}
@@ -160,7 +163,32 @@ func (r *UsageRepository) FindVerification(ctx context.Context, accountID, works
 	return &verification, usage.ResultOK, nil
 }
 
-func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string, verification domain.BuildVerification, verifiedAt string) (*domain.BuildVerification, usage.Result, error) {
+func (r *UsageRepository) ClaimCompilation(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, claimedAt, expiresAt string) (string, usage.Result, error) {
+	var leaseID string
+	err := r.db.QueryRowContext(ctx, `
+		INSERT INTO candidate_compile_leases (candidate_id,lease_id,expires_at)
+		SELECT id,lower(hex(randomblob(16))),? FROM build_candidates
+		WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status='pending'
+		ON CONFLICT(candidate_id) DO UPDATE SET lease_id=excluded.lease_id,expires_at=excluded.expires_at
+		WHERE candidate_compile_leases.expires_at<=?
+		RETURNING lease_id`, expiresAt, candidateID, workspaceID, accountID, projectID, snapshotHash, claimedAt).Scan(&leaseID)
+	if err == sql.ErrNoRows {
+		var candidate int
+		if queryErr := r.db.QueryRowContext(ctx, `SELECT count(*) FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status='pending'`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&candidate); queryErr != nil {
+			return "", "", queryErr
+		}
+		if candidate == 1 {
+			return "", usage.ResultCompileInProgress, nil
+		}
+		return "", usage.ResultCandidateInvalid, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return leaseID, usage.ResultOK, nil
+}
+
+func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, leaseID string, verification domain.BuildVerification, verifiedAt string) (*domain.BuildVerification, usage.Result, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, "", err
@@ -169,8 +197,9 @@ func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, wor
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,verified_at)
 		SELECT id,?,?,?,? FROM build_candidates
-		WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status IN ('pending','committed')
-		ON CONFLICT(candidate_id) DO NOTHING`, snapshotHash, verification.Toolchain, verification.DurationMS, verifiedAt, candidateID, workspaceID, accountID, projectID, snapshotHash)
+		WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status='pending'
+		AND EXISTS (SELECT 1 FROM candidate_compile_leases WHERE candidate_id=? AND lease_id=?)
+		ON CONFLICT(candidate_id) DO NOTHING`, snapshotHash, verification.Toolchain, verification.DurationMS, verifiedAt, candidateID, workspaceID, accountID, projectID, snapshotHash, candidateID, leaseID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -188,20 +217,30 @@ func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, wor
 	if _, err = tx.ExecContext(ctx, `INSERT INTO build_attempts (id,candidate_id,snapshot_hash,status,result_code,toolchain,duration_ms,attempted_at) VALUES (lower(hex(randomblob(16))),?,?,'passed','compile_passed',?,?,?)`, candidateID, snapshotHash, verification.Toolchain, verification.DurationMS, verifiedAt); err != nil {
 		return nil, "", err
 	}
+	deleted, err := tx.ExecContext(ctx, `DELETE FROM candidate_compile_leases WHERE candidate_id=? AND lease_id=?`, candidateID, leaseID)
+	if err != nil {
+		return nil, "", err
+	}
+	if changed, changeErr := deleted.RowsAffected(); changeErr != nil || changed != 1 {
+		if changeErr != nil {
+			return nil, "", changeErr
+		}
+		return nil, usage.ResultCandidateInvalid, nil
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, "", err
 	}
 	return &stored, usage.ResultOK, nil
 }
 
-func (r *UsageRepository) RecordBuildFailure(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, resultCode, attemptedAt string) (usage.Result, error) {
+func (r *UsageRepository) RecordBuildFailure(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash, leaseID, resultCode, attemptedAt string) (usage.Result, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
 	var candidate int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status='pending'`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&candidate); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM build_candidates c JOIN candidate_compile_leases l ON l.candidate_id=c.id WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.snapshot_hash=? AND c.status='pending' AND l.lease_id=?`, candidateID, workspaceID, accountID, projectID, snapshotHash, leaseID).Scan(&candidate); err != nil {
 		return "", err
 	}
 	if candidate != 1 {
@@ -211,6 +250,9 @@ func (r *UsageRepository) RecordBuildFailure(ctx context.Context, accountID, wor
 		return "", err
 	}
 	if err = appendAudit(ctx, tx, workspaceID, accountID, "candidate.compile_failed", "project", projectID, attemptedAt, map[string]any{"candidateId": candidateID, "snapshotHash": snapshotHash, "resultCode": resultCode}); err != nil {
+		return "", err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM candidate_compile_leases WHERE candidate_id=? AND lease_id=?`, candidateID, leaseID); err != nil {
 		return "", err
 	}
 	if err = tx.Commit(); err != nil {
@@ -231,6 +273,9 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	}
 	if member == 0 {
 		return nil, usage.ResultForbidden, nil
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM candidate_compile_leases WHERE candidate_id IN (SELECT id FROM build_candidates WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending')`, workspaceID, accountID, projectID); err != nil {
+		return nil, "", err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, workspaceID, accountID, projectID); err != nil {
 		return nil, "", err

@@ -60,7 +60,7 @@ func main() {
 	if recovered > 0 {
 		logger.Warn("interrupted_agent_runs_recovered", "count", recovered)
 	}
-	usageService := usage.NewService(identityService, orchestrator, usageRepository, buildCompiler)
+	usageService := usage.NewServiceWithCompiler(identityService, orchestrator, usageRepository, buildCompiler, config.BuilderTimeout)
 	databaseReady := sqlite.ReadyCheck(database)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		Ready: func() error {

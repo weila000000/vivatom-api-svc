@@ -91,6 +91,56 @@ func TestRecoverInterruptedUsageAppendsTerminalAudit(t *testing.T) {
 	}
 }
 
+func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	identityService := identity.NewService(NewIdentityRepository(database))
+	owner, err := identityService.Register(ctx, identity.Registration{Email: "candidate@example.com", Password: "password-one", Name: "Owner", WorkspaceName: "Candidates"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := NewUsageRepository(database)
+	workspaceID := owner.Workspaces[0].ID
+	usageID, result, err := repository.Reserve(ctx, owner.User.ID, workspaceID, "project-1", "build", 1, "2026-01-01T00:00:00Z")
+	if err != nil || result != usage.ResultOK {
+		t.Fatalf("reserve: result=%q err=%v", result, err)
+	}
+	snapshot := domain.ProjectSnapshot{Source: "model", Title: "Task", Summary: "Task", EntryFile: "/src/main.ts", Files: map[string]string{"/src/main.ts": "export {}"}, Dependencies: map[string]string{"vue": "3.5.42"}}
+	firstID, _, err := repository.StoreCandidate(ctx, workspaceID, owner.User.ID, "project-1", usageID, "first", snapshot, "2026-01-01T00:01:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstHash string
+	if err = database.QueryRow(`SELECT snapshot_hash FROM build_candidates WHERE id=?`, firstID).Scan(&firstHash); err != nil {
+		t.Fatal(err)
+	}
+	if leaseID, claimResult, claimErr := repository.ClaimCompilation(ctx, owner.User.ID, workspaceID, "project-1", firstID, firstHash, "2026-01-01T00:01:00Z", "2026-01-01T00:10:00Z"); claimErr != nil || claimResult != usage.ResultOK || leaseID == "" {
+		t.Fatalf("claim first candidate: lease=%q result=%q err=%v", leaseID, claimResult, claimErr)
+	}
+	secondID, _, err := repository.StoreCandidate(ctx, workspaceID, owner.User.ID, "project-1", usageID, "second", snapshot, "2026-01-01T00:02:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstStatus, secondStatus string
+	if err = database.QueryRow(`SELECT status FROM build_candidates WHERE id=?`, firstID).Scan(&firstStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.QueryRow(`SELECT status FROM build_candidates WHERE id=?`, secondID).Scan(&secondStatus); err != nil {
+		t.Fatal(err)
+	}
+	if firstStatus != "rejected" || secondStatus != "pending" {
+		t.Fatalf("candidate statuses: first=%q second=%q", firstStatus, secondStatus)
+	}
+	var leases int
+	if err = database.QueryRow(`SELECT count(*) FROM candidate_compile_leases WHERE candidate_id=?`, firstID).Scan(&leases); err != nil || leases != 0 {
+		t.Fatalf("superseded candidate leases=%d err=%v", leases, err)
+	}
+}
+
 type acceptingCompiler struct{ calls int }
 
 func (c *acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
@@ -235,7 +285,18 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if err = database.QueryRow(`SELECT count(*) FROM build_attempts WHERE candidate_id=? AND result_code='compiler_unavailable'`, candidateID).Scan(&unavailableAttempts); err != nil || unavailableAttempts != 1 {
 				t.Fatalf("unavailable build attempt: count=%d err=%v", unavailableAttempts, err)
 			}
-			if _, result, verificationErr := repository.RecordVerification(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, domain.BuildVerification{Toolchain: "recovered-compiler", DurationMS: 12}, "2026-01-01T00:10:00Z"); verificationErr != nil || result != usage.ResultOK {
+			leaseID, claimResult, claimErr := repository.ClaimCompilation(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, "2026-01-01T00:05:00Z", "2026-01-01T00:06:00Z")
+			if claimErr != nil || claimResult != usage.ResultOK || leaseID == "" {
+				t.Fatalf("claim compilation: lease=%q result=%q err=%v", leaseID, claimResult, claimErr)
+			}
+			if duplicateLease, duplicateResult, duplicateErr := repository.ClaimCompilation(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, "2026-01-01T00:05:30Z", "2026-01-01T00:07:00Z"); duplicateErr != nil || duplicateResult != usage.ResultCompileInProgress || duplicateLease != "" {
+				t.Fatalf("duplicate claim: lease=%q result=%q err=%v", duplicateLease, duplicateResult, duplicateErr)
+			}
+			takeoverLease, takeoverResult, takeoverErr := repository.ClaimCompilation(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, "2026-01-01T00:06:00Z", "2026-01-01T00:08:00Z")
+			if takeoverErr != nil || takeoverResult != usage.ResultOK || takeoverLease == "" || takeoverLease == leaseID {
+				t.Fatalf("expired lease takeover: lease=%q result=%q err=%v", takeoverLease, takeoverResult, takeoverErr)
+			}
+			if _, result, verificationErr := repository.RecordVerification(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, takeoverLease, domain.BuildVerification{Toolchain: "recovered-compiler", DurationMS: 12}, "2026-01-01T00:10:00Z"); verificationErr != nil || result != usage.ResultOK {
 				t.Fatalf("record interrupted verification: result=%q err=%v", result, verificationErr)
 			}
 			resumeService := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, nil)
