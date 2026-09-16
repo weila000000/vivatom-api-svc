@@ -86,6 +86,29 @@ func TestOpenAIProviderRetriesTransientStatus(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderRetriesInvalidOutputWithoutLeakingPartialFields(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		content := `{"name":"accepted"}`
+		if requests.Add(1) == 1 {
+			content = `{"name":"rejected","description":"must not leak","unknown":true}`
+		}
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", content)
+	}))
+	defer server.Close()
+	provider := NewOpenAIProvider(Config{APIKey: "key", BaseURL: server.URL, Model: "model", Timeout: time.Second, MaxRetries: 1})
+	result := struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}{Name: "original", Description: "original"}
+	if err := provider.completeJSON(context.Background(), "system", "user", &result); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 2 || result.Name != "accepted" || result.Description != "" {
+		t.Fatalf("requests=%d result=%+v", requests.Load(), result)
+	}
+}
+
 func TestStrictCompletionJSONRejectsAmbiguousDocuments(t *testing.T) {
 	var target struct {
 		Name string `json:"name"`

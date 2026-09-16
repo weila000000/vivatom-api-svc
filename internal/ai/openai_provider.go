@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -137,10 +138,12 @@ func (p *OpenAIProvider) completeJSON(ctx context.Context, system, user string, 
 	for attempt := 0; attempt <= p.config.MaxRetries; attempt++ {
 		content, retry, err := p.request(ctx, body)
 		if err == nil {
-			if err := decodeStrictJSON(content, target); err != nil {
-				return invalidOutput(err)
+			if decodeErr := decodeStrictJSON(content, target); decodeErr == nil {
+				return nil
+			} else {
+				err = invalidOutput(decodeErr)
+				retry = true
 			}
-			return nil
 		}
 		last = err
 		if !retry || attempt == p.config.MaxRetries || ctx.Err() != nil {
@@ -243,6 +246,10 @@ func readCompletionStream(reader io.Reader) (string, error) {
 }
 
 func decodeStrictJSON(content string, target any) error {
+	targetValue := reflect.ValueOf(target)
+	if targetValue.Kind() != reflect.Pointer || targetValue.IsNil() {
+		return errors.New("JSON target must be a non-nil pointer")
+	}
 	validator := json.NewDecoder(strings.NewReader(content))
 	first, err := validator.Token()
 	if err != nil {
@@ -260,9 +267,10 @@ func decodeStrictJSON(content string, target any) error {
 		}
 		return err
 	}
+	candidate := reflect.New(targetValue.Elem().Type())
 	decoder := json.NewDecoder(strings.NewReader(content))
 	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(target); err != nil {
+	if err = decoder.Decode(candidate.Interface()); err != nil {
 		return err
 	}
 	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
@@ -271,6 +279,7 @@ func decodeStrictJSON(content string, target any) error {
 		}
 		return err
 	}
+	targetValue.Elem().Set(candidate.Elem())
 	return nil
 }
 
