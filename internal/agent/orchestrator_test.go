@@ -24,7 +24,7 @@ func (p invalidPlanProvider) Plan(ctx context.Context, prompt string) (domain.Bu
 
 func (p contractBreakingProvider) Build(ctx context.Context, prompt string, plan domain.BuildPlan) (domain.ProjectSnapshot, error) {
 	snapshot, err := p.FakeProvider.Build(ctx, prompt, plan)
-	delete(snapshot.Files, "/src/App.vue")
+	delete(snapshot.Files, "/src/App.tsx")
 	return snapshot, err
 }
 
@@ -50,7 +50,7 @@ func TestPlanEventOrder(t *testing.T) {
 			agents = append(agents, event.Agent)
 		}
 	}
-	want := []string{"agent.started", "action.status", "agent.output", "action.status", "agent.completed", "agent.started", "action.status", "action.status", "agent.completed", "approval.required", "done"}
+	want := []string{"agent.started", "action.status", "agent.output", "action.status", "agent.completed", "agent.started", "agent.completed", "agent.started", "action.status", "action.status", "agent.completed", "approval.required", "done"}
 	if len(types) != len(want) {
 		t.Fatalf("event types = %v, want %v", types, want)
 	}
@@ -59,7 +59,7 @@ func TestPlanEventOrder(t *testing.T) {
 			t.Fatalf("event %d = %q, want %q", i, types[i], want[i])
 		}
 	}
-	if len(agents) != 2 || agents[0] != "mike" || agents[1] != "ava" {
+	if len(agents) != 3 || agents[0] != "mike" || agents[1] != "emma" || agents[2] != "bob" {
 		t.Fatalf("planning agents = %v", agents)
 	}
 }
@@ -130,13 +130,13 @@ func TestBuildReturnsCandidateSnapshot(t *testing.T) {
 	if snapshot == nil {
 		t.Fatal("build did not emit snapshot.completed")
 	}
-	if snapshot.EntryFile != "/src/main.ts" || len(snapshot.Files) != 3 {
+	if snapshot.EntryFile != "/src/App.tsx" || len(snapshot.Files) != 3 {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 	if lastType != "done" {
 		t.Fatalf("last event = %q, want done", lastType)
 	}
-	for _, role := range []string{"ava", "bob", "lin", "sam"} {
+	for _, role := range []string{"alex"} {
 		if !agents[role] {
 			t.Fatalf("missing build agent %q in %v", role, agents)
 		}
@@ -218,5 +218,27 @@ func TestRevisionActionsReturnGuardedCompleteSnapshots(t *testing.T) {
 		if candidate == nil || candidate.EntryFile != base.EntryFile || len(candidate.Files) <= len(base.Files) {
 			t.Fatalf("%s returned incomplete candidate: %+v", action, candidate)
 		}
+	}
+}
+
+func TestRaceReturnsTwoOrderedCandidates(t *testing.T) {
+	provider := &ai.FakeProvider{}
+	orchestrator := NewOrchestrator(provider, generation.NewGuard())
+	plan, err := provider.Plan(context.Background(), "收入分析 Dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := orchestrator.Run(context.Background(), domain.AgentRequest{Action: domain.ActionRace, Mode: domain.ModeRace, ProjectID: "p1", Prompt: "收入分析 Dashboard", Plan: &plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidates []domain.RaceCandidate
+	for event := range events {
+		if event.Type == "snapshot.completed" {
+			candidates = event.Candidates
+		}
+	}
+	if len(candidates) != 2 || candidates[0].ID != "candidate-a" || candidates[1].ID != "candidate-b" {
+		t.Fatalf("unexpected candidates: %+v", candidates)
 	}
 }

@@ -63,6 +63,7 @@ func main() {
 	usageService := usage.NewServiceWithCompiler(identityService, orchestrator, usageRepository, buildCompiler, config.BuilderTimeout)
 	databaseReady := sqlite.ReadyCheck(database)
 	router := httpapi.NewRouter(httpapi.Dependencies{
+		DirectAgent: orchestrator,
 		Ready: func() error {
 			if err := databaseReady(); err != nil {
 				return err

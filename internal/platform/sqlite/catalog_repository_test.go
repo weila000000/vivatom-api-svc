@@ -210,9 +210,9 @@ func registerDocumentVersion(t *testing.T, database *sql.DB, workspaceID, accoun
 
 func documentSnapshot() domain.ProjectSnapshot {
 	return domain.ProjectSnapshot{
-		Source: "template", Title: "Task", Summary: "Board", EntryFile: "/src/main.ts",
-		Files:        map[string]string{"/src/main.ts": `import App from "./App.vue"`, "/src/App.vue": `<template><main>Task</main></template>`},
-		Dependencies: map[string]string{"vue": "3.5.42"}, Backend: domain.BackendSpec{Auth: "none", Collections: []domain.BackendCollection{}},
+		Source: "template", Title: "Task", Summary: "Board", EntryFile: "/src/App.tsx",
+		Files:        map[string]string{"/src/main.tsx": `import App from "./App"`, "/src/App.tsx": `export default function App() { return <main>Task</main> }`},
+		Dependencies: map[string]string{"react": "18.3.1", "react-dom": "18.3.1"},
 	}
 }
 

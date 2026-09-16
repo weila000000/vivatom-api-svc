@@ -1,6 +1,6 @@
 # Vivatom API Service
 
-Vivatom 的 Go + Gin 后端。服务负责平台身份、工作区权限、Agent 编排、完整源码快照检查、用量控制、审计日志和生成应用 Runtime。
+Vivatom 的 Go + Gin Agent 服务。核心闭环是：根据模式制定计划、等待人工批准、生成受限的 React + TypeScript 多文件快照、对话迭代，以及在 Race Mode 中并行生成两个视觉候选。
 
 ## Development
 
@@ -19,11 +19,25 @@ set +a
 go run ./cmd/api
 ```
 
-OpenAI-compatible Provider 默认连接 `https://vibe.linux008.com/v1`。在 `.env` 中配置 `VIVATOM_AI_API_KEY`（或 `OPENAI_API_KEY`）后，`auto` 模式会启用真实 Provider；未配置密钥时使用本地 FakeProvider。
+OpenAI-compatible Provider 默认连接 `https://vibe.linux008.com/v1`。在 `.env` 中配置 `VIBE_API_KEY` 后，`auto` 模式会启用 `gpt-6-astra`；未配置密钥或模型调用失败时使用本地模板通道，并通过 SSE 发出 `local_fallback` 警告。
 
-`VIVATOM_AI_MODEL` 是所有角色的默认模型。可以用 `VIVATOM_AI_ANALYST_MODEL`、`VIVATOM_AI_ARCHITECT_MODEL` 和 `VIVATOM_AI_BUILDER_MODEL` 分别覆盖产品分析、方案架构和源码工程模型；空值继承默认模型。
+`VIBE_MODEL` 是所有角色的默认模型。原有的 `VIVATOM_AI_*` 变量仍作为兼容别名。
+
+前端通过 `POST /api/agent` 调用服务，请求动作支持 `plan`、`build`、`iterate`、`repair` 和 `race`，响应为 SSE。`mode` 支持 `engineer`、`team` 和 `race`，省略时默认为 `team`。
 
 默认地址为 `http://localhost:8080`。
+
+也可以直接运行仓库脚本：
+
+```bash
+./scripts/api.sh       # 只启动 API
+./scripts/worker.sh    # 只启动 Build Worker
+./scripts/dev.sh       # 同时启动 API 和 Worker
+./scripts/full-stack.sh # 同时启动 Web、API 和 Worker
+./scripts/test.sh      # 运行全部检查
+```
+
+GoLand 或 IntelliJ IDEA 单独打开后端项目后，选择共享运行项 `Vivatom Backend`，即可同时启动 API 与 Build Worker。前端在另一个 IDE 窗口打开 `../vivatom-web`，选择 `Vivatom Frontend` 独立启动。后端脚本会读取可选的 `.env`；未创建时使用 `.env.example` 对应的本地安全默认值。
 
 容器方式会同时启动 API 与隔离构建 Worker：
 

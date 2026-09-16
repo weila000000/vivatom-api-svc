@@ -22,10 +22,10 @@ type OpenAIProvider struct {
 }
 
 const (
-	maxCompletionBytes           = 4 * 1024 * 1024
-	maxStreamEventBytes          = 8 * 1024 * 1024
-	maxStreamBytes               = 32 * 1024 * 1024
-	runtimeSDKGenerationContract = ` When backend.enabled is true, business source MUST import { vivatomRuntime, RuntimeClientError } from './vivatom-runtime' and use only this SDK for approved authentication and collections; the platform injects that module after generation, so do not include /src/vivatom-runtime.ts. Exact async results: register(email,password) and login(email,password) resolve to {user:{id,email,createdAt},token,expiresAt}; me() resolves to {user:{id,email,createdAt}}; logout() resolves to {loggedOut:true}; list<T>(collection) resolves to T[]; create<T> and update<T> resolve to T; remove(collection,id) resolves to {deleted:true}. Runtime records are flat objects containing id, createdAt, updatedAt and the approved collection fields, not a nested data property. SDK calls throw RuntimeClientError with code, message, and status. Await every call and render explicit loading, empty, success, and actionable error states. Owner collections require register/login before CRUD; public collections do not. Never replace Runtime persistence with local mock data or direct fetch.`
+	maxCompletionBytes      = 4 * 1024 * 1024
+	maxStreamEventBytes     = 8 * 1024 * 1024
+	maxStreamBytes          = 32 * 1024 * 1024
+	reactGenerationContract = ` Generate a browser-only React + TypeScript application for Sandpack. It must include at least one real, testable interaction. Persist user-created or mutable preview data with a project-specific localStorage key. Do not use network requests, authentication, server APIs, cookies, eval, dynamic Function, WebSocket, parent/top window access, or remote imports.`
 )
 
 func NewOpenAIProvider(config Config) *OpenAIProvider {
@@ -43,7 +43,7 @@ func NewOpenAIProvider(config Config) *OpenAIProvider {
 
 func (p *OpenAIProvider) AnalyzeRequirements(ctx context.Context, prompt string) (domain.RequirementBrief, error) {
 	var brief domain.RequirementBrief
-	err := p.completeJSON(ctx, "You are a product analyst. Convert the user's request into exactly one JSON object with: goal string, users string[], coreFlows string[], constraints string[]. Keep every item concrete and concise. Include only requirements supported by the user request; put necessary engineering boundaries in constraints. No markdown or code fences.", prompt, &brief)
+	err := p.completeJSON(ctx, "You are Emma, a product strategist. Convert the user's request into exactly one JSON object with: goal string, users string[], coreFlows string[], constraints string[]. Keep every item concrete and concise. No markdown or code fences.", prompt, &brief)
 	if err != nil {
 		return domain.RequirementBrief{}, err
 	}
@@ -72,7 +72,7 @@ func (p *OpenAIProvider) Plan(ctx context.Context, prompt string) (domain.BuildP
 
 func (p *OpenAIProvider) plan(ctx context.Context, prompt string) (domain.BuildPlan, error) {
 	var plan domain.BuildPlan
-	err := p.completeJSON(ctx, "You are a product architect. Return exactly one JSON object with this shape: productType string, productSummary string, targetUsers string[], features string[], pages [{name,purpose}], filePlan [{path,responsibility}], designDirection string, acceptanceChecks string[], backend {enabled boolean, auth string, collections [{name,label,access string,fields [{name,label,type string,required boolean}]}]}. Hard constraints: productType MUST be exactly website or web_app; every filePlan.path MUST start with /src/ and end in .vue, .ts, .tsx, .js, .jsx, .css, or .json; backend.auth MUST be exactly none or email_password; collection access MUST be exactly public or owner; collection and field names MUST match ^[a-z][a-z0-9_]{0,47}$ using lowercase snake_case; field type MUST be exactly text, long_text, number, boolean, or date; when backend.enabled is false, auth MUST be none and collections MUST be empty; owner collections require email_password auth. Use Vue 3. Enum values and paths must not be translated. No markdown or code fences.", prompt, &plan)
+	err := p.completeJSON(ctx, "You are Bob, a technical planner. Return exactly one JSON object with this shape: productSummary string, targetUsers string[], features string[], pages [{name,purpose}], filePlan [{path,responsibility}], designDirection string, acceptanceChecks string[]. Every filePlan.path must start with /src/ and use .ts, .tsx, .js, .jsx, .css, or .json. Plan a React + TypeScript browser application with at least one real interaction and localStorage persistence when data changes. No markdown or code fences.", prompt, &plan)
 	if err != nil {
 		return domain.BuildPlan{}, err
 	}
@@ -89,7 +89,7 @@ func (p *OpenAIProvider) Build(ctx context.Context, prompt string, plan domain.B
 	}
 	userPrompt := fmt.Sprintf("User requirement:\n%s\n\nApproved plan:\n%s", prompt, planJSON)
 	var snapshot domain.ProjectSnapshot
-	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer. Return one JSON object: source string, title string, summary string, files object mapping absolute /src paths to complete file contents, dependencies object mapping package names to versions, entryFile string, backend matching the approved plan. Include /src/main.ts, /src/App.vue and /src/styles.css."+runtimeSDKGenerationContract+" The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
+	err = p.completeJSON(ctx, "You are Alex, a senior React engineer. Return one JSON object: source string (vibe), title string, summary string, files object mapping absolute /src paths to complete file contents, dependencies object mapping package names to versions, and entryFile exactly /src/App.tsx. Include /src/main.tsx, /src/App.tsx and /src/styles.css."+reactGenerationContract+" Allowed packages are react, react-dom, lucide-react, recharts, and date-fns. No markdown or code fences.", userPrompt, &snapshot)
 	if err != nil {
 		return domain.ProjectSnapshot{}, err
 	}
@@ -106,7 +106,7 @@ func (p *OpenAIProvider) Revise(ctx context.Context, action domain.AgentAction, 
 	}
 	userPrompt := fmt.Sprintf("Operation: %s\nInstruction: %s\n\nCurrent complete snapshot:\n%s", action, instruction, currentJSON)
 	var snapshot domain.ProjectSnapshot
-	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer revising an existing application. Return the complete replacement snapshot as one JSON object with source, title, summary, files, dependencies, entryFile, and backend. Preserve working features unless the instruction changes them. For repair, fix the supplied problem. For polish, improve usability and visual quality. Include every required file, not a diff."+runtimeSDKGenerationContract+" Preserve existing Runtime imports and behavior unless the instruction explicitly changes the approved feature. The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
+	err = p.completeJSON(ctx, "You are Alex, a senior React engineer revising an existing application. Return the complete replacement snapshot as one JSON object with source, title, summary, files, dependencies, and entryFile exactly /src/App.tsx. Preserve working features unless the instruction changes them. Include every required file."+reactGenerationContract+" Allowed packages are react, react-dom, lucide-react, recharts, and date-fns. No markdown or code fences.", userPrompt, &snapshot)
 	if err != nil {
 		return domain.ProjectSnapshot{}, err
 	}
@@ -119,11 +119,11 @@ func (p *OpenAIProvider) Revise(ctx context.Context, action domain.AgentAction, 
 func (p *OpenAIProvider) completeJSON(ctx context.Context, system, user string, target any) error {
 	model := p.config.Model
 	switch {
-	case strings.HasPrefix(system, "You are a product analyst"):
+	case strings.HasPrefix(system, "You are Emma"):
 		model = p.config.AnalystModel
-	case strings.HasPrefix(system, "You are a product architect"):
+	case strings.HasPrefix(system, "You are Bob"):
 		model = p.config.ArchitectModel
-	case strings.HasPrefix(system, "You are a senior Vue 3 engineer"):
+	case strings.HasPrefix(system, "You are Alex"):
 		model = p.config.BuilderModel
 	}
 	payload := map[string]any{
@@ -181,8 +181,14 @@ func (p *OpenAIProvider) request(ctx context.Context, body []byte) (string, bool
 		switch response.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
 			return "", false, &ProviderError{Code: "provider_unauthorized", Retryable: false}
+		case http.StatusPaymentRequired:
+			return "", false, &ProviderError{Code: "provider_quota_exhausted", Retryable: false}
+		case http.StatusRequestTimeout:
+			return "", true, &ProviderError{Code: "provider_timeout", Retryable: true}
 		case http.StatusTooManyRequests:
 			return "", true, &ProviderError{Code: "provider_rate_limited", Retryable: true}
+		case 529:
+			return "", true, &ProviderError{Code: "provider_overloaded", Retryable: true}
 		default:
 			retry := response.StatusCode >= 500
 			return "", retry, &ProviderError{Code: "provider_error", Retryable: retry}

@@ -11,6 +11,7 @@ import (
 
 type Dependencies struct {
 	Ready           func() error
+	DirectAgent     AgentRunner
 	AgentRunner     WorkspaceAgent
 	Usage           UsageService
 	Runtime         RuntimeService
@@ -67,6 +68,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
+	api.POST("/agent", agentLimiter.middleware("agent"), directAgentHandler{runner: deps.DirectAgent}.run)
 	platformAuth := api.Group("/platform/auth")
 	platformAuth.POST("/register", authLimiter.middleware("register"), identityHandler{service: deps.Identity}.register)
 	platformAuth.POST("/login", authLimiter.middleware("login"), identityHandler{service: deps.Identity}.login)

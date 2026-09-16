@@ -29,6 +29,27 @@ type agentHandler struct {
 	runner WorkspaceAgent
 }
 
+type directAgentHandler struct {
+	runner AgentRunner
+}
+
+func (h directAgentHandler) run(c *gin.Context) {
+	if h.runner == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "agent_unavailable", "message": "Agent 服务尚未准备好"})
+		return
+	}
+	request, ok := decodeAgentRequest(c)
+	if !ok {
+		return
+	}
+	events, err := h.runner.Run(c.Request.Context(), request)
+	if err != nil {
+		writeAgentError(c, err)
+		return
+	}
+	writeAgentStream(c, events)
+}
+
 func (h agentHandler) run(c *gin.Context) {
 	if h.runner == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
@@ -41,6 +62,20 @@ func (h agentHandler) run(c *gin.Context) {
 		return
 	}
 
+	request, ok := decodeAgentRequest(c)
+	if !ok {
+		return
+	}
+
+	events, err := h.runner.Run(c.Request.Context(), token, c.Param("workspaceId"), request)
+	if err != nil {
+		writeAgentError(c, err)
+		return
+	}
+	writeAgentStream(c, events)
+}
+
+func decodeAgentRequest(c *gin.Context) (domain.AgentRequest, bool) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAgentRequestBytes)
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
@@ -54,19 +89,20 @@ func (h agentHandler) run(c *gin.Context) {
 			status = http.StatusRequestEntityTooLarge
 		}
 		c.JSON(status, gin.H{"error": code, "message": "Agent 请求无法解析"})
-		return
+		return domain.AgentRequest{}, false
 	}
 	if err := ensureJSONEnded(decoder); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_json", "message": "请求只能包含一个 JSON 对象"})
-		return
+		return domain.AgentRequest{}, false
 	}
-
-	events, err := h.runner.Run(c.Request.Context(), token, c.Param("workspaceId"), request)
-	if err != nil {
+	if err := request.Validate(); err != nil {
 		writeAgentError(c, err)
-		return
+		return domain.AgentRequest{}, false
 	}
+	return request, true
+}
 
+func writeAgentStream(c *gin.Context, events <-chan domain.AgentEvent) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache, no-transform")
 	c.Header("Connection", "keep-alive")

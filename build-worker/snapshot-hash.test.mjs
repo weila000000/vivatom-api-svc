@@ -7,26 +7,16 @@ const contractSnapshot = {
   title: "任务 & 看板",
   summary: "跨语言 <hash>\u2028contract",
   files: {
-    "/src/main.js": "import App from './App.vue'",
-    "/src/App.vue": "<template><main>任务</main></template>",
+    "/src/main.tsx": "import App from './App'",
+    "/src/App.tsx": "export default function App() { return <main>任务</main> }",
   },
-  dependencies: { vue: "3.5.42" },
-  entryFile: "/src/main.js",
-  backend: {
-    enabled: true,
-    auth: "tenant",
-    collections: [{
-      name: "tasks",
-      label: "任务",
-      access: "member",
-      fields: [{ name: "title", label: "标题", type: "text", required: true }],
-    }],
-  },
+  dependencies: { react: "18.3.1", "react-dom": "18.3.1" },
+  entryFile: "/src/App.tsx",
 }
 
 test("matches the Go snapshot hash contract", () => {
-  assert.equal(hashSnapshot(contractSnapshot), "c45fc3ae0daf2695fd5dbad7733b07ec5dfaef79bab916761ff37d07f109b4a6")
-  assert.match(snapshotPayload(contractSnapshot), /\\u003ctemplate\\u003e/)
+  assert.equal(hashSnapshot(contractSnapshot), "70d25bbe3a5a4f56294ca4cd738fa5083740410808552c663ad4f79dde85580a")
+  assert.match(snapshotPayload(contractSnapshot), /\\u003cmain\\u003e/)
   assert.match(snapshotPayload(contractSnapshot), /\\u0026/)
 })
 

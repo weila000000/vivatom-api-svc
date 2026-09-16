@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { createHash } from "node:crypto"
 
-export const toolchainPackages = ["vite", "@vitejs/plugin-vue", "vue"]
+export const toolchainPackages = ["vite", "@vitejs/plugin-react", "react", "react-dom", "lucide-react", "recharts", "date-fns", "typescript"]
 
 export function describeToolchain(manifest, lockfile, installed, nodeVersion, lockHash) {
   const parts = [`node@${nodeVersion}`]

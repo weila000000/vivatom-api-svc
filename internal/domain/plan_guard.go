@@ -28,9 +28,6 @@ func ValidateBuildPlan(plan BuildPlan) error {
 			}
 		}
 	}
-	if plan.ProductType != "website" && plan.ProductType != "web_app" {
-		return &ContractError{Code: "plan.product_type_invalid"}
-	}
 	if !boundedText(plan.ProductSummary, 2000) {
 		return &ContractError{Code: "plan.summary_invalid"}
 	}
@@ -64,7 +61,7 @@ func ValidateBuildPlan(plan BuildPlan) error {
 		}
 		seenPaths[file.Path] = true
 	}
-	return validateBackendPlan(plan.Backend)
+	return nil
 }
 
 func validateBackendPlan(backend BackendSpec) error {
@@ -123,7 +120,7 @@ func safePlanPath(value string) bool {
 		return false
 	}
 	extension := path.Ext(value)
-	return extension == ".vue" || extension == ".ts" || extension == ".tsx" || extension == ".js" || extension == ".jsx" || extension == ".css" || extension == ".json"
+	return extension == ".ts" || extension == ".tsx" || extension == ".js" || extension == ".jsx" || extension == ".css" || extension == ".json"
 }
 func validPlanFieldType(value string) bool {
 	return value == "text" || value == "long_text" || value == "number" || value == "boolean" || value == "date"

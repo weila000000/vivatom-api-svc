@@ -40,7 +40,7 @@ function log(level, event, fields = {}) {
 }
 
 function safePath(path) {
-  return /^\/src\/[A-Za-z0-9_./-]+\.(vue|ts|js|tsx|jsx|css|json)$/.test(path) && !path.includes("..")
+  return /^\/src\/[A-Za-z0-9_./-]+\.(ts|js|tsx|jsx|css|json)$/.test(path) && !path.includes("..")
 }
 
 function sanitizeDiagnostic(value, workspaces = []) {
@@ -162,14 +162,24 @@ async function artifactManifest(artifactId) {
 async function compile(snapshot, snapshotHash, requestId, signal) {
   if (signal.aborted) throw new Error("request_aborted")
   const dependencies = snapshot?.dependencies && Object.entries(snapshot.dependencies)
-  if (!snapshot || !safePath(snapshot.entryFile) || !snapshot.files || dependencies?.length !== 1 || snapshot.dependencies.vue !== "3.5.42") {
+  const allowedDependencies = new Map([
+    ["react", "18.3.1"],
+    ["react-dom", "18.3.1"],
+    ["lucide-react", "0.468.0"],
+    ["recharts", "2.13.3"],
+    ["date-fns", "4.1.0"],
+  ])
+  if (!snapshot || snapshot.entryFile !== "/src/App.tsx" || !snapshot.files || !dependencies ||
+      !dependencies.some(([name]) => name === "react") || !dependencies.some(([name]) => name === "react-dom") ||
+      dependencies.some(([name, version]) => allowedDependencies.get(name) !== version)) {
     throw new Error("invalid_snapshot")
   }
   if (!/^[a-f0-9]{64}$/.test(snapshotHash)) throw new Error("invalid_snapshot_hash")
   if (hashSnapshot(snapshot) !== snapshotHash) throw new Error("snapshot_hash_mismatch")
   const toolchain = await verifyToolchain(workerRoot)
   const paths = Object.keys(snapshot.files)
-  if (!paths.length || paths.length > 80 || paths.some((path) => !safePath(path)) || !paths.includes(snapshot.entryFile)) {
+  if (!paths.length || paths.length > 16 || paths.some((path) => !safePath(path)) ||
+      !paths.includes(snapshot.entryFile) || !paths.includes("/src/main.tsx")) {
     throw new Error("invalid_snapshot")
   }
   const sourceBytes = Object.values(snapshot.files).reduce((total, source) => total + Buffer.byteLength(String(source)), 0)
@@ -178,10 +188,10 @@ async function compile(snapshot, snapshotHash, requestId, signal) {
   try {
     const canonicalDirectory = await realpath(directory)
     await symlink(join(workerRoot, "node_modules"), join(directory, "node_modules"), "dir")
-    await writeFile(join(directory, "index.html"), `<div id="app"></div><script type="module" src="${snapshot.entryFile}"></script>`)
+    await writeFile(join(directory, "index.html"), '<div id="root"></div><script type="module" src="/src/main.tsx"></script>')
     for (const [path, source] of Object.entries(snapshot.files)) {
       if (signal.aborted) throw new Error("request_aborted")
-      if (typeof source !== "string" || Buffer.byteLength(source) > 256 * 1024) throw new Error("invalid_snapshot")
+      if (typeof source !== "string" || Buffer.byteLength(source) > 120 * 1024) throw new Error("invalid_snapshot")
       const target = join(directory, path.slice(1))
       await mkdir(dirname(target), { recursive: true })
       await writeFile(target, source)

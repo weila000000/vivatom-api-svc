@@ -16,7 +16,7 @@ import (
 )
 
 func TestOpenAIProviderBuildsPlanFromStream(t *testing.T) {
-	planJSON := `{"productType":"web_app","productSummary":"任务板","targetUsers":["团队"],"features":["任务"],"pages":[{"name":"首页","purpose":"管理任务"}],"filePlan":[{"path":"/src/App.vue","responsibility":"页面"}],"designDirection":"清晰","acceptanceChecks":["可创建任务"],"backend":{"enabled":false,"auth":"none","collections":[]}}`
+	planJSON := `{"productSummary":"任务板","targetUsers":["团队"],"features":["任务"],"pages":[{"name":"首页","purpose":"管理任务"}],"filePlan":[{"path":"/src/App.tsx","responsibility":"页面"}],"designDirection":"清晰","acceptanceChecks":["可创建任务"]}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
@@ -37,7 +37,7 @@ func TestOpenAIProviderBuildsPlanFromStream(t *testing.T) {
 }
 
 func TestOpenAIProviderPlansFromIndependentRequirementBrief(t *testing.T) {
-	planJSON := `{"productType":"web_app","productSummary":"任务板","targetUsers":["团队"],"features":["任务"],"pages":[{"name":"首页","purpose":"管理任务"}],"filePlan":[{"path":"/src/App.vue","responsibility":"页面"}],"designDirection":"清晰","acceptanceChecks":["可创建任务"],"backend":{"enabled":false,"auth":"none","collections":[]}}`
+	planJSON := `{"productSummary":"任务板","targetUsers":["团队"],"features":["任务"],"pages":[{"name":"首页","purpose":"管理任务"}],"filePlan":[{"path":"/src/App.tsx","responsibility":"页面"}],"designDirection":"清晰","acceptanceChecks":["可创建任务"]}`
 	briefJSON := `{"goal":"管理团队任务","users":["小团队"],"coreFlows":["创建并分配任务"],"constraints":["移动端可用"]}`
 	var requests atomic.Int32
 	models := make([]string, 0, 2)
@@ -68,12 +68,11 @@ func TestOpenAIProviderPlansFromIndependentRequirementBrief(t *testing.T) {
 	}
 }
 
-func TestBuilderRequestsShareExactRuntimeSDKContract(t *testing.T) {
-	backend := domain.BackendSpec{Enabled: true, Auth: "email_password", Collections: []domain.BackendCollection{{Name: "tasks", Label: "Tasks", Access: "owner"}}}
+func TestBuilderRequestsShareReactSandboxContract(t *testing.T) {
 	snapshot := domain.ProjectSnapshot{
-		Source: "provider", Title: "Tasks", Summary: "Task board", EntryFile: "/src/main.ts", Backend: backend,
-		Files:        map[string]string{"/src/main.ts": "main", "/src/App.vue": "app", "/src/styles.css": "css"},
-		Dependencies: map[string]string{"vue": "3.5.42"},
+		Source: "vibe", Title: "Tasks", Summary: "Task board", EntryFile: "/src/App.tsx",
+		Files:        map[string]string{"/src/main.tsx": "main", "/src/App.tsx": "app", "/src/styles.css": "css"},
+		Dependencies: map[string]string{"react": "18.3.1", "react-dom": "18.3.1"},
 	}
 	snapshotJSON, err := json.Marshal(snapshot)
 	if err != nil {
@@ -95,7 +94,7 @@ func TestBuilderRequestsShareExactRuntimeSDKContract(t *testing.T) {
 	}))
 	defer server.Close()
 	provider := NewOpenAIProvider(Config{APIKey: "key", BaseURL: server.URL, Model: "model", Timeout: time.Second})
-	plan := domain.BuildPlan{Backend: backend}
+	plan := domain.BuildPlan{}
 	if _, err := provider.Build(context.Background(), "build tasks", plan); err != nil {
 		t.Fatal(err)
 	}
@@ -104,14 +103,13 @@ func TestBuilderRequestsShareExactRuntimeSDKContract(t *testing.T) {
 	}
 	for index, system := range systems {
 		for _, required := range []string{
-			"Runtime records are flat objects",
-			"me() resolves to {user:{id,email,createdAt}}",
-			"RuntimeClientError with code, message, and status",
-			"loading, empty, success, and actionable error states",
-			"Never replace Runtime persistence with local mock data or direct fetch",
+			"React + TypeScript",
+			"real, testable interaction",
+			"project-specific localStorage key",
+			"Do not use network requests",
 		} {
 			if !strings.Contains(system, required) {
-				t.Fatalf("request %d omitted Runtime contract %q", index, required)
+				t.Fatalf("request %d omitted React sandbox contract %q", index, required)
 			}
 		}
 	}
@@ -241,5 +239,20 @@ func TestConfigSupportsPerRoleModels(t *testing.T) {
 	config, err := ConfigFromEnv()
 	if err != nil || config.AnalystModel != "fast-model" || config.ArchitectModel != "reasoning-model" || config.BuilderModel != "coding-model" {
 		t.Fatalf("config=%+v err=%v", config, err)
+	}
+}
+
+func TestLocalTemplateSelectsProductTypeAndFulfillsFilePlan(t *testing.T) {
+	provider := &FakeProvider{}
+	plan := domain.BuildPlan{FilePlan: []domain.PlanFile{{Path: "/src/App.tsx"}, {Path: "/src/components/Metrics.tsx"}}}
+	snapshot, err := provider.Build(context.Background(), "收入分析 Dashboard", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Title != "数据分析 Dashboard" || snapshot.Source != "template" {
+		t.Fatalf("unexpected template: %+v", snapshot)
+	}
+	if _, exists := snapshot.Files["/src/components/Metrics.tsx"]; !exists {
+		t.Fatal("local template did not fulfill the approved file plan")
 	}
 }

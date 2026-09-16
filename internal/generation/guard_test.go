@@ -10,13 +10,13 @@ import (
 func validSnapshot() domain.ProjectSnapshot {
 	return domain.ProjectSnapshot{
 		Source: "template", Title: "Task", Summary: "Board",
-		EntryFile: "/src/main.ts",
+		EntryFile: "/src/App.tsx",
 		Files: map[string]string{
-			"/src/main.ts":   `import App from "./App.vue"`,
-			"/src/App.vue":   `<template><main>Task</main></template>`,
+			"/src/main.tsx":  `import App from "./App"`,
+			"/src/App.tsx":   `export default function App() { return <main>Task</main> }`,
 			"/src/style.css": `main { color: green; }`,
 		},
-		Dependencies: map[string]string{"vue": "latest"},
+		Dependencies: map[string]string{"react": "latest", "react-dom": "latest"},
 		Backend:      domain.BackendSpec{Auth: "none", Collections: []domain.BackendCollection{}},
 	}
 }
@@ -26,8 +26,8 @@ func TestGuardAcceptsAndPinsDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Dependencies["vue"] != "3.5.42" {
-		t.Fatalf("vue version = %q", got.Dependencies["vue"])
+	if got.Dependencies["react"] != "18.3.1" {
+		t.Fatalf("react version = %q", got.Dependencies["react"])
 	}
 }
 
@@ -42,7 +42,7 @@ func TestGuardRejectsUnsafeSnapshots(t *testing.T) {
 		{"network", func(s *domain.ProjectSnapshot) { s.Files["/src/main.ts"] = `fetch("/secret")` }, "source.fetch"},
 		{"remote css", func(s *domain.ProjectSnapshot) { s.Files["/src/style.css"] = `@import "https://bad.test/a.css";` }, "source.remote_css"},
 		{"dependency", func(s *domain.ProjectSnapshot) { s.Dependencies["axios"] = "latest" }, "dependency.denied"},
-		{"missing vue", func(s *domain.ProjectSnapshot) { delete(s.Dependencies, "vue") }, "dependency.missing"},
+		{"missing react", func(s *domain.ProjectSnapshot) { delete(s.Dependencies, "react") }, "dependency.missing"},
 		{"large file", func(s *domain.ProjectSnapshot) { s.Files["/src/main.ts"] = strings.Repeat("x", MaxSnapshotFileBytes+1) }, "file.too_large"},
 	}
 	for _, tt := range tests {
@@ -64,7 +64,7 @@ func TestGuardDoesNotMutateInputDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.Dependencies["vue"] != "latest" {
+	if input.Dependencies["react"] != "latest" {
 		t.Fatal("guard mutated provider-owned input")
 	}
 }

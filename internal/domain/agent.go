@@ -6,14 +6,26 @@ import (
 	"strings"
 )
 
+const (
+	MaxPromptRunes = 12000
+	MaxErrorRunes  = 8000
+)
+
 type AgentAction string
+
+type WorkMode string
 
 const (
 	ActionPlan    AgentAction = "plan"
 	ActionBuild   AgentAction = "build"
 	ActionIterate AgentAction = "iterate"
 	ActionRepair  AgentAction = "repair"
-	ActionPolish  AgentAction = "polish"
+	ActionRace    AgentAction = "race"
+	ActionPolish  AgentAction = "polish" // kept for older clients; treated as an iteration
+
+	ModeEngineer WorkMode = "engineer"
+	ModeTeam     WorkMode = "team"
+	ModeRace     WorkMode = "race"
 )
 
 type BackendField struct {
@@ -54,8 +66,8 @@ type RequirementBrief struct {
 }
 
 type BuildPlan struct {
-	RequirementBrief *RequirementBrief `json:"requirementBrief,omitempty"`
-	ProductType      string            `json:"productType"`
+	RequirementBrief *RequirementBrief `json:"-"`
+	ProductType      string            `json:"-"`
 	ProductSummary   string            `json:"productSummary"`
 	TargetUsers      []string          `json:"targetUsers"`
 	Features         []string          `json:"features"`
@@ -63,7 +75,7 @@ type BuildPlan struct {
 	FilePlan         []PlanFile        `json:"filePlan"`
 	DesignDirection  string            `json:"designDirection"`
 	AcceptanceChecks []string          `json:"acceptanceChecks"`
-	Backend          BackendSpec       `json:"backend"`
+	Backend          BackendSpec       `json:"-"`
 }
 
 type ProjectSnapshot struct {
@@ -73,7 +85,7 @@ type ProjectSnapshot struct {
 	Files        map[string]string `json:"files"`
 	Dependencies map[string]string `json:"dependencies"`
 	EntryFile    string            `json:"entryFile"`
-	Backend      BackendSpec       `json:"backend"`
+	Backend      BackendSpec       `json:"-"`
 }
 
 type BuildVerification struct {
@@ -90,6 +102,7 @@ type SafetyVerification struct {
 
 type AgentRequest struct {
 	Action     AgentAction      `json:"action"`
+	Mode       WorkMode         `json:"mode,omitempty"`
 	ProjectID  string           `json:"projectId"`
 	ApprovalID string           `json:"approvalId,omitempty"`
 	Prompt     string           `json:"prompt,omitempty"`
@@ -114,6 +127,13 @@ type AgentEvent struct {
 	SnapshotHash string           `json:"snapshotHash,omitempty"`
 	Plan         *BuildPlan       `json:"plan,omitempty"`
 	Snapshot     *ProjectSnapshot `json:"snapshot,omitempty"`
+	Candidates   []RaceCandidate  `json:"candidates,omitempty"`
+}
+
+type RaceCandidate struct {
+	ID        string          `json:"id"`
+	Direction string          `json:"direction"`
+	Snapshot  ProjectSnapshot `json:"snapshot"`
 }
 
 func (r AgentRequest) Validate() error {
@@ -121,24 +141,39 @@ func (r AgentRequest) Validate() error {
 		return errors.New("projectId is required")
 	}
 
+	mode := r.Mode
+	if mode == "" {
+		mode = ModeTeam
+	}
+	if mode != ModeEngineer && mode != ModeTeam && mode != ModeRace {
+		return fmt.Errorf("unsupported mode %q", mode)
+	}
+
 	switch r.Action {
 	case ActionPlan:
-		if strings.TrimSpace(r.Prompt) == "" {
+		if !validRequestText(r.Prompt, MaxPromptRunes) {
 			return errors.New("plan requires prompt")
 		}
 	case ActionBuild:
-		if strings.TrimSpace(r.Prompt) == "" || r.Plan == nil {
+		if !validRequestText(r.Prompt, MaxPromptRunes) || r.Plan == nil {
 			return errors.New("build requires prompt and plan")
 		}
 		if err := ValidateBuildPlan(*r.Plan); err != nil {
 			return err
 		}
+	case ActionRace:
+		if !validRequestText(r.Prompt, MaxPromptRunes) || r.Plan == nil {
+			return errors.New("race requires prompt and plan")
+		}
+		if err := ValidateBuildPlan(*r.Plan); err != nil {
+			return err
+		}
 	case ActionIterate, ActionPolish:
-		if strings.TrimSpace(r.Prompt) == "" || r.Snapshot == nil {
+		if !validRequestText(r.Prompt, MaxPromptRunes) || r.Snapshot == nil {
 			return fmt.Errorf("%s requires prompt and snapshot", r.Action)
 		}
 	case ActionRepair:
-		if strings.TrimSpace(r.Error) == "" || r.Snapshot == nil {
+		if !validRequestText(r.Error, MaxErrorRunes) || r.Snapshot == nil {
 			return errors.New("repair requires error and snapshot")
 		}
 	default:
@@ -146,4 +181,9 @@ func (r AgentRequest) Validate() error {
 	}
 
 	return nil
+}
+
+func validRequestText(value string, limit int) bool {
+	size := len([]rune(strings.TrimSpace(value)))
+	return size > 0 && size <= limit
 }

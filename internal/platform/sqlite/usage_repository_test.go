@@ -285,7 +285,7 @@ func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
 	if err != nil || result != usage.ResultOK {
 		t.Fatalf("reserve: result=%q err=%v", result, err)
 	}
-	snapshot := domain.ProjectSnapshot{Source: "model", Title: "Task", Summary: "Task", EntryFile: "/src/main.ts", Files: map[string]string{"/src/main.ts": "export {}"}, Dependencies: map[string]string{"vue": "3.5.42"}}
+	snapshot := domain.ProjectSnapshot{Source: "vibe", Title: "Task", Summary: "Task", EntryFile: "/src/App.tsx", Files: map[string]string{"/src/App.tsx": "export default function App() { return null }"}, Dependencies: map[string]string{"react": "18.3.1", "react-dom": "18.3.1"}}
 	firstID, _, err := repository.StoreCandidate(ctx, workspaceID, owner.User.ID, "project-1", usageID, "first", snapshot, "2026-01-01T00:01:00Z")
 	if err != nil {
 		t.Fatal(err)

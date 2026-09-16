@@ -21,11 +21,11 @@ func TestHashSnapshotMatchesWorkerContract(t *testing.T) {
 		Title:   "任务 & 看板",
 		Summary: "跨语言 <hash>\u2028contract",
 		Files: map[string]string{
-			"/src/main.js": "import App from './App.vue'",
-			"/src/App.vue":  "<template><main>任务</main></template>",
+			"/src/main.tsx": "import App from './App'",
+			"/src/App.tsx":  "export default function App() { return <main>任务</main> }",
 		},
-		Dependencies: map[string]string{"vue": "3.5.42"},
-		EntryFile:    "/src/main.js",
+		Dependencies: map[string]string{"react": "18.3.1", "react-dom": "18.3.1"},
+		EntryFile:    "/src/App.tsx",
 		Backend: BackendSpec{
 			Enabled: true,
 			Auth:    "tenant",
@@ -39,7 +39,7 @@ func TestHashSnapshotMatchesWorkerContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expected = "c45fc3ae0daf2695fd5dbad7733b07ec5dfaef79bab916761ff37d07f109b4a6"
+	const expected = "70d25bbe3a5a4f56294ca4cd738fa5083740410808552c663ad4f79dde85580a"
 	if hash != expected {
 		t.Fatalf("snapshot hash contract changed: got %s want %s", hash, expected)
 	}

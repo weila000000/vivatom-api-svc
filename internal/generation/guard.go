@@ -11,18 +11,22 @@ import (
 
 const (
 	PolicyVersion        = "snapshot-guard/v2"
-	MaxSnapshotFiles     = 80
-	MaxSnapshotFileBytes = 256 * 1024
-	MaxSnapshotBytes     = 2 * 1024 * 1024
+	MaxSnapshotFiles     = 16
+	MaxSnapshotFileBytes = 120 * 1024
+	MaxSnapshotBytes     = 120 * 1024
 )
 
 var (
 	allowedDependencies = map[string]string{
-		"vue": "3.5.42",
+		"react":        "18.3.1",
+		"react-dom":    "18.3.1",
+		"lucide-react": "0.468.0",
+		"recharts":     "2.13.3",
+		"date-fns":     "4.1.0",
 	}
 	allowedExtensions = map[string]bool{
 		".css": true, ".js": true, ".jsx": true, ".json": true,
-		".ts": true, ".tsx": true, ".vue": true,
+		".ts": true, ".tsx": true,
 	}
 	forbiddenSource = []struct {
 		code    string
@@ -59,13 +63,16 @@ func NewGuard() Guard {
 }
 
 func (Guard) Check(input domain.ProjectSnapshot) (domain.ProjectSnapshot, error) {
+	if input.Source != "vibe" && input.Source != "template" {
+		return input, &RejectedError{Code: "source.invalid"}
+	}
 	if len(input.Files) == 0 {
 		return input, &RejectedError{Code: "files.empty"}
 	}
 	if len(input.Files) > MaxSnapshotFiles {
 		return input, &RejectedError{Code: "files.too_many"}
 	}
-	if !safeSourcePath(input.EntryFile) {
+	if input.EntryFile != "/src/App.tsx" || !safeSourcePath(input.EntryFile) {
 		return input, &RejectedError{Code: "entry.invalid", Path: input.EntryFile}
 	}
 	if _, exists := input.Files[input.EntryFile]; !exists {
@@ -97,8 +104,10 @@ func (Guard) Check(input domain.ProjectSnapshot) (domain.ProjectSnapshot, error)
 		files[filePath] = source
 	}
 
-	if _, exists := input.Dependencies["vue"]; !exists {
-		return input, &RejectedError{Code: "dependency.missing", Path: "vue"}
+	for _, required := range []string{"react", "react-dom"} {
+		if _, exists := input.Dependencies[required]; !exists {
+			return input, &RejectedError{Code: "dependency.missing", Path: required}
+		}
 	}
 	dependencies := make(map[string]string, len(input.Dependencies))
 	for name := range input.Dependencies {

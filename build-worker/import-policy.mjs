@@ -21,7 +21,7 @@ export function createImportPolicy(sourceRoot) {
     if (!importer) return true
     const importerPath = importer.split("?", 1)[0]
     if (!withinSource(importerPath)) return true
-    if (source === "vue") return true
+	if (["react", "react/jsx-runtime", "react/jsx-dev-runtime", "react-dom", "react-dom/client", "lucide-react", "recharts", "date-fns"].includes(source)) return true
 
     const sourcePath = decodePath(source.split("?", 1)[0])
     if (!sourcePath) return false

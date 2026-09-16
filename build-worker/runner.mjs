@@ -1,5 +1,5 @@
 import { build } from "vite"
-import vue from "@vitejs/plugin-vue"
+import react from "@vitejs/plugin-react"
 import { join } from "node:path"
 import { createImportPolicy } from "./import-policy.mjs"
 
@@ -23,7 +23,7 @@ await build({
   root,
   base: "./",
   configFile: false,
-  plugins: [controlledImports, vue()],
+	plugins: [controlledImports, react()],
   build: {
     outDir: "dist",
     emptyOutDir: true,

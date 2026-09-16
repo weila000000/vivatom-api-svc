@@ -16,12 +16,31 @@ import (
 
 type stubRunner struct{}
 
+type directStubRunner struct{}
+
 func (stubRunner) Run(_ context.Context, _, _ string, request domain.AgentRequest) (<-chan domain.AgentEvent, error) {
 	events := make(chan domain.AgentEvent, 2)
 	events <- domain.AgentEvent{Type: "agent.started", Agent: "mike"}
 	events <- domain.AgentEvent{Type: "done"}
 	close(events)
 	return events, request.Validate()
+}
+
+func (directStubRunner) Run(_ context.Context, request domain.AgentRequest) (<-chan domain.AgentEvent, error) {
+	events := make(chan domain.AgentEvent, 2)
+	events <- domain.AgentEvent{Type: "agent.started", Agent: "mike"}
+	events <- domain.AgentEvent{Type: "done"}
+	close(events)
+	return events, request.Validate()
+}
+
+func TestDirectAgentSSE(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/agent", strings.NewReader(`{"action":"plan","mode":"team","projectId":"p1","prompt":"任务板"}`))
+	recorder := httptest.NewRecorder()
+	NewRouter(Dependencies{DirectAgent: directStubRunner{}}).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "event: done") {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func TestAgentSSE(t *testing.T) {
