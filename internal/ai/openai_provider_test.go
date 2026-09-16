@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"vivatom-api-svc/internal/domain"
 )
 
 func TestOpenAIProviderBuildsPlanFromStream(t *testing.T) {
@@ -63,6 +65,55 @@ func TestOpenAIProviderPlansFromIndependentRequirementBrief(t *testing.T) {
 	plan, err := provider.PlanFromBrief(context.Background(), "做一个任务板", brief)
 	if err != nil || plan.RequirementBrief == nil || plan.RequirementBrief.Goal != brief.Goal || requests.Load() != 2 || len(models) != 2 || models[0] != "analyst-model" || models[1] != "architect-model" {
 		t.Fatalf("plan=%+v requests=%d models=%v err=%v", plan, requests.Load(), models, err)
+	}
+}
+
+func TestBuilderRequestsShareExactRuntimeSDKContract(t *testing.T) {
+	backend := domain.BackendSpec{Enabled: true, Auth: "email_password", Collections: []domain.BackendCollection{{Name: "tasks", Label: "Tasks", Access: "owner"}}}
+	snapshot := domain.ProjectSnapshot{
+		Source: "provider", Title: "Tasks", Summary: "Task board", EntryFile: "/src/main.ts", Backend: backend,
+		Files:        map[string]string{"/src/main.ts": "main", "/src/App.vue": "app", "/src/styles.css": "css"},
+		Dependencies: map[string]string{"vue": "3.5.42"},
+	}
+	snapshotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var systems []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		systems = append(systems, body.Messages[0].Content)
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", snapshotJSON)
+	}))
+	defer server.Close()
+	provider := NewOpenAIProvider(Config{APIKey: "key", BaseURL: server.URL, Model: "model", Timeout: time.Second})
+	plan := domain.BuildPlan{Backend: backend}
+	if _, err := provider.Build(context.Background(), "build tasks", plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Revise(context.Background(), domain.ActionIterate, "add filters", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	for index, system := range systems {
+		for _, required := range []string{
+			"Runtime records are flat objects",
+			"me() resolves to {user:{id,email,createdAt}}",
+			"RuntimeClientError with code, message, and status",
+			"loading, empty, success, and actionable error states",
+			"Never replace Runtime persistence with local mock data or direct fetch",
+		} {
+			if !strings.Contains(system, required) {
+				t.Fatalf("request %d omitted Runtime contract %q", index, required)
+			}
+		}
 	}
 }
 

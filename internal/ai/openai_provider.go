@@ -22,9 +22,10 @@ type OpenAIProvider struct {
 }
 
 const (
-	maxCompletionBytes  = 4 * 1024 * 1024
-	maxStreamEventBytes = 8 * 1024 * 1024
-	maxStreamBytes      = 32 * 1024 * 1024
+	maxCompletionBytes           = 4 * 1024 * 1024
+	maxStreamEventBytes          = 8 * 1024 * 1024
+	maxStreamBytes               = 32 * 1024 * 1024
+	runtimeSDKGenerationContract = ` When backend.enabled is true, business source MUST import { vivatomRuntime, RuntimeClientError } from './vivatom-runtime' and use only this SDK for approved authentication and collections; the platform injects that module after generation, so do not include /src/vivatom-runtime.ts. Exact async results: register(email,password) and login(email,password) resolve to {user:{id,email,createdAt},token,expiresAt}; me() resolves to {user:{id,email,createdAt}}; logout() resolves to {loggedOut:true}; list<T>(collection) resolves to T[]; create<T> and update<T> resolve to T; remove(collection,id) resolves to {deleted:true}. Runtime records are flat objects containing id, createdAt, updatedAt and the approved collection fields, not a nested data property. SDK calls throw RuntimeClientError with code, message, and status. Await every call and render explicit loading, empty, success, and actionable error states. Owner collections require register/login before CRUD; public collections do not. Never replace Runtime persistence with local mock data or direct fetch.`
 )
 
 func NewOpenAIProvider(config Config) *OpenAIProvider {
@@ -88,7 +89,7 @@ func (p *OpenAIProvider) Build(ctx context.Context, prompt string, plan domain.B
 	}
 	userPrompt := fmt.Sprintf("User requirement:\n%s\n\nApproved plan:\n%s", prompt, planJSON)
 	var snapshot domain.ProjectSnapshot
-	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer. Return one JSON object: source string, title string, summary string, files object mapping absolute /src paths to complete file contents, dependencies object mapping package names to versions, entryFile string, backend matching the approved plan. Include /src/main.ts, /src/App.vue and /src/styles.css. When backend.enabled is true, business source MUST import { vivatomRuntime } from './vivatom-runtime' and use its register/login/me/logout/list/create/update/remove methods for the approved authentication and collections; the platform injects that module after generation, so do not include /src/vivatom-runtime.ts yourself. The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
+	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer. Return one JSON object: source string, title string, summary string, files object mapping absolute /src paths to complete file contents, dependencies object mapping package names to versions, entryFile string, backend matching the approved plan. Include /src/main.ts, /src/App.vue and /src/styles.css."+runtimeSDKGenerationContract+" The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
 	if err != nil {
 		return domain.ProjectSnapshot{}, err
 	}
@@ -105,7 +106,7 @@ func (p *OpenAIProvider) Revise(ctx context.Context, action domain.AgentAction, 
 	}
 	userPrompt := fmt.Sprintf("Operation: %s\nInstruction: %s\n\nCurrent complete snapshot:\n%s", action, instruction, currentJSON)
 	var snapshot domain.ProjectSnapshot
-	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer revising an existing application. Return the complete replacement snapshot as one JSON object with source, title, summary, files, dependencies, entryFile, and backend. Preserve working features unless the instruction changes them. For repair, fix the supplied problem. For polish, improve usability and visual quality. Include every required file, not a diff. When backend.enabled is true, preserve business-source imports and usage of { vivatomRuntime } from './vivatom-runtime'; the platform replaces /src/vivatom-runtime.ts after generation. The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
+	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer revising an existing application. Return the complete replacement snapshot as one JSON object with source, title, summary, files, dependencies, entryFile, and backend. Preserve working features unless the instruction changes them. For repair, fix the supplied problem. For polish, improve usability and visual quality. Include every required file, not a diff."+runtimeSDKGenerationContract+" Preserve existing Runtime imports and behavior unless the instruction explicitly changes the approved feature. The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
 	if err != nil {
 		return domain.ProjectSnapshot{}, err
 	}
