@@ -81,7 +81,7 @@ func (p *OpenAIProvider) Build(ctx context.Context, prompt string, plan domain.B
 	}
 	userPrompt := fmt.Sprintf("User requirement:\n%s\n\nApproved plan:\n%s", prompt, planJSON)
 	var snapshot domain.ProjectSnapshot
-	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer. Return one JSON object: source string, title string, summary string, files object mapping absolute /src paths to complete file contents, dependencies object mapping package names to versions, entryFile string, backend matching the approved plan. Include /src/main.ts, /src/App.vue and /src/styles.css. Use only Vue 3 and browser-safe dependencies. No markdown or code fences.", userPrompt, &snapshot)
+	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer. Return one JSON object: source string, title string, summary string, files object mapping absolute /src paths to complete file contents, dependencies object mapping package names to versions, entryFile string, backend matching the approved plan. Include /src/main.ts, /src/App.vue and /src/styles.css. The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
 	if err != nil {
 		return domain.ProjectSnapshot{}, err
 	}
@@ -98,7 +98,7 @@ func (p *OpenAIProvider) Revise(ctx context.Context, action domain.AgentAction, 
 	}
 	userPrompt := fmt.Sprintf("Operation: %s\nInstruction: %s\n\nCurrent complete snapshot:\n%s", action, instruction, currentJSON)
 	var snapshot domain.ProjectSnapshot
-	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer revising an existing application. Return the complete replacement snapshot as one JSON object with source, title, summary, files, dependencies, entryFile, and backend. Preserve working features unless the instruction changes them. For repair, fix the supplied problem. For polish, improve usability and visual quality. Include every required file, not a diff. Use only Vue 3 and browser-safe dependencies. No markdown or code fences.", userPrompt, &snapshot)
+	err = p.completeJSON(ctx, "You are a senior Vue 3 engineer revising an existing application. Return the complete replacement snapshot as one JSON object with source, title, summary, files, dependencies, entryFile, and backend. Preserve working features unless the instruction changes them. For repair, fix the supplied problem. For polish, improve usability and visual quality. Include every required file, not a diff. The only package dependency and bare import allowed is vue at version 3.5.42; implement everything else with local source files and browser APIs. No markdown or code fences.", userPrompt, &snapshot)
 	if err != nil {
 		return domain.ProjectSnapshot{}, err
 	}

@@ -88,7 +88,8 @@ async function verifyArtifact(artifactId) {
 }
 
 async function compile(snapshot, snapshotHash, requestId) {
-  if (!snapshot || !safePath(snapshot.entryFile) || !snapshot.files || snapshot.dependencies?.vue !== "3.5.42") {
+  const dependencies = snapshot?.dependencies && Object.entries(snapshot.dependencies)
+  if (!snapshot || !safePath(snapshot.entryFile) || !snapshot.files || dependencies?.length !== 1 || snapshot.dependencies.vue !== "3.5.42") {
     throw new Error("invalid_snapshot")
   }
   if (!/^[a-f0-9]{64}$/.test(snapshotHash)) throw new Error("invalid_snapshot_hash")

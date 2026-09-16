@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	PolicyVersion        = "snapshot-guard/v1"
+	PolicyVersion        = "snapshot-guard/v2"
 	MaxSnapshotFiles     = 80
 	MaxSnapshotFileBytes = 256 * 1024
 	MaxSnapshotBytes     = 2 * 1024 * 1024
@@ -97,6 +97,9 @@ func (Guard) Check(input domain.ProjectSnapshot) (domain.ProjectSnapshot, error)
 		files[filePath] = source
 	}
 
+	if _, exists := input.Dependencies["vue"]; !exists {
+		return input, &RejectedError{Code: "dependency.missing", Path: "vue"}
+	}
 	dependencies := make(map[string]string, len(input.Dependencies))
 	for name := range input.Dependencies {
 		version, allowed := allowedDependencies[name]

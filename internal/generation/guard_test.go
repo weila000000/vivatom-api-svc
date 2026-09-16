@@ -42,6 +42,7 @@ func TestGuardRejectsUnsafeSnapshots(t *testing.T) {
 		{"network", func(s *domain.ProjectSnapshot) { s.Files["/src/main.ts"] = `fetch("/secret")` }, "source.fetch"},
 		{"remote css", func(s *domain.ProjectSnapshot) { s.Files["/src/style.css"] = `@import "https://bad.test/a.css";` }, "source.remote_css"},
 		{"dependency", func(s *domain.ProjectSnapshot) { s.Dependencies["axios"] = "latest" }, "dependency.denied"},
+		{"missing vue", func(s *domain.ProjectSnapshot) { delete(s.Dependencies, "vue") }, "dependency.missing"},
 		{"large file", func(s *domain.ProjectSnapshot) { s.Files["/src/main.ts"] = strings.Repeat("x", MaxSnapshotFileBytes+1) }, "file.too_large"},
 	}
 	for _, tt := range tests {
