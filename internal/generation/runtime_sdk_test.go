@@ -25,6 +25,9 @@ func TestInjectRuntimeSDKAddsControlledBridgeClient(t *testing.T) {
 	if !strings.Contains(source, "memorySession") || !strings.Contains(source, "try { return localStorage") {
 		t.Fatal("runtime SDK does not tolerate opaque-origin storage")
 	}
+	if !strings.Contains(source, `window.parent.postMessage({ type: readyType, projectId }, "*")`) {
+		t.Fatal("runtime SDK does not announce successful execution")
+	}
 	if _, exists := snapshot.Files[RuntimeSDKPath]; exists {
 		t.Fatal("injection mutated provider snapshot")
 	}

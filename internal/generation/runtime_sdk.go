@@ -26,9 +26,12 @@ func runtimeSDKSource(projectID string) string {
 	return `const projectId = ` + projectID + `
 const requestType = "vivatom:runtime-request"
 const responseType = "vivatom:runtime-response"
+const readyType = "vivatom:runtime-ready"
 const sessionKey = "vivatom-session-" + projectId
 let sequence = 0
 let memorySession: string | undefined
+
+window.parent.postMessage({ type: readyType, projectId }, "*")
 
 function readSession() {
   try { return localStorage.getItem(sessionKey) ?? memorySession } catch { return memorySession }
