@@ -14,7 +14,8 @@ import (
 
 func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 	var receivedToken string
-	var receivedArtifactID string
+	var receivedSnapshotHash string
+	artifactID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		receivedToken = request.Header.Get("X-Vivatom-Builder-Token")
 		if request.URL.Path != "/compile" {
@@ -22,14 +23,14 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 			return
 		}
 		var body struct {
-			ArtifactID string `json:"artifactId"`
+			SnapshotHash string `json:"snapshotHash"`
 		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		receivedArtifactID = body.ArtifactID
+		receivedSnapshotHash = body.SnapshotHash
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"data":{"toolchain":"vite@7.3.6+vue@3.5.42","durationMs":120,"artifactId":"`+body.ArtifactID+`"}}`)
+		_, _ = io.WriteString(writer, `{"data":{"toolchain":"vite@7.3.6+vue@3.5.42","durationMs":120,"artifactId":"`+artifactID+`"}}`)
 	}))
 	defer server.Close()
 	client := NewClient(server.URL, "builder-secret", time.Second)
@@ -43,8 +44,11 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 	if receivedToken != "builder-secret" {
 		t.Fatalf("builder token = %q", receivedToken)
 	}
-	if verification.ArtifactID == "" || verification.ArtifactID != receivedArtifactID {
-		t.Fatalf("artifact id: verification=%q received=%q", verification.ArtifactID, receivedArtifactID)
+	if receivedSnapshotHash == "" {
+		t.Fatal("snapshot hash was not sent")
+	}
+	if verification.ArtifactID != artifactID {
+		t.Fatalf("artifact id = %q", verification.ArtifactID)
 	}
 
 	failed := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

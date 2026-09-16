@@ -1,9 +1,9 @@
 import { createServer } from "node:http"
 import { createReadStream } from "node:fs"
-import { mkdtemp, mkdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
-import { dirname, extname, join, resolve } from "node:path"
+import { createHash, randomUUID } from "node:crypto"
+import { dirname, extname, join, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
 
 const port = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
@@ -43,17 +43,54 @@ async function readJSON(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"))
 }
 
-async function compile(snapshot, artifactId, requestId) {
+async function hashArtifact(root) {
+  const hash = createHash("sha256")
+  async function visit(directory) {
+    const entries = await readdir(directory, { withFileTypes: true })
+    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+    for (const entry of entries) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await visit(path)
+        continue
+      }
+      if (!entry.isFile()) throw new Error("invalid_artifact")
+      const artifactPath = relative(root, path).split(sep).join("/")
+      const content = await readFile(path)
+      hash.update(`${Buffer.byteLength(artifactPath)}:`)
+      hash.update(artifactPath)
+      hash.update(`${content.length}:`)
+      hash.update(content)
+    }
+  }
+  await visit(root)
+  return hash.digest("hex")
+}
+
+async function persistArtifact(source, artifactId, requestId) {
+  await mkdir(artifactRoot, { recursive: true })
+  const destination = join(artifactRoot, artifactId)
+  try {
+    await rename(source, destination)
+    log("info", "artifact_persisted", { requestId, artifactId })
+  } catch (error) {
+    if (error?.code !== "EEXIST" && error?.code !== "ENOTEMPTY") throw error
+    if (await hashArtifact(destination) !== artifactId) throw new Error("artifact_integrity_mismatch")
+    log("info", "artifact_reused", { requestId, artifactId })
+  }
+}
+
+async function compile(snapshot, snapshotHash, requestId) {
   if (!snapshot || !safePath(snapshot.entryFile) || !snapshot.files || snapshot.dependencies?.vue !== "3.5.42") {
     throw new Error("invalid_snapshot")
   }
-  if (!/^[a-f0-9]{64}$/.test(artifactId)) throw new Error("invalid_artifact_id")
+  if (!/^[a-f0-9]{64}$/.test(snapshotHash)) throw new Error("invalid_snapshot_hash")
   const paths = Object.keys(snapshot.files)
   if (!paths.length || paths.length > 80 || paths.some((path) => !safePath(path)) || !paths.includes(snapshot.entryFile)) {
     throw new Error("invalid_snapshot")
   }
   const sourceBytes = Object.values(snapshot.files).reduce((total, source) => total + Buffer.byteLength(String(source)), 0)
-  log("info", "compile_started", { requestId, entryFile: snapshot.entryFile, fileCount: paths.length, sourceBytes })
+  log("info", "compile_started", { requestId, snapshotHash, entryFile: snapshot.entryFile, fileCount: paths.length, sourceBytes })
   const directory = await mkdtemp(join(tmpdir(), "vivatom-build-"))
   try {
     const canonicalDirectory = await realpath(directory)
@@ -66,11 +103,10 @@ async function compile(snapshot, artifactId, requestId) {
       await writeFile(target, source)
     }
     await runVite(canonicalDirectory, canonicalDirectory, snapshot.entryFile, requestId)
-    await mkdir(artifactRoot, { recursive: true })
-    const destination = join(artifactRoot, artifactId)
-    await rm(destination, { recursive: true, force: true })
-    await rename(join(directory, "dist"), destination)
-    log("info", "artifact_persisted", { requestId, artifactId })
+    const dist = join(directory, "dist")
+    const artifactId = await hashArtifact(dist)
+    await persistArtifact(dist, artifactId, requestId)
+    return artifactId
   } finally {
     await rm(directory, { recursive: true, force: true })
     log("info", "workspace_removed", { requestId })
@@ -195,8 +231,8 @@ const server = createServer(async (request, response) => {
   try {
     const body = await readJSON(request)
     const startedAt = Date.now()
-    await compile(body.snapshot, body.artifactId, requestId)
-    const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt, artifactId: body.artifactId } })
+    const artifactId = await compile(body.snapshot, body.snapshotHash, requestId)
+    const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt, artifactId } })
     response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
     log("info", "request_completed", { requestId, status: 200, durationMs: Date.now() - requestStartedAt, toolchain })
   } catch (error) {

@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"vivatom-api-svc/internal/domain"
 )
+
+var artifactIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type Client struct {
 	url        string
@@ -53,14 +56,14 @@ func (c *Client) Ready(ctx context.Context) error {
 }
 
 func (c *Client) Compile(ctx context.Context, snapshot domain.ProjectSnapshot) (domain.BuildVerification, error) {
-	artifactID, _, err := domain.HashSnapshot(snapshot)
+	snapshotHash, _, err := domain.HashSnapshot(snapshot)
 	if err != nil {
 		return domain.BuildVerification{}, err
 	}
 	payload, err := json.Marshal(struct {
-		Snapshot   domain.ProjectSnapshot `json:"snapshot"`
-		ArtifactID string                 `json:"artifactId"`
-	}{Snapshot: snapshot, ArtifactID: artifactID})
+		Snapshot     domain.ProjectSnapshot `json:"snapshot"`
+		SnapshotHash string                 `json:"snapshotHash"`
+	}{Snapshot: snapshot, SnapshotHash: snapshotHash})
 	if err != nil {
 		return domain.BuildVerification{}, err
 	}
@@ -90,7 +93,7 @@ func (c *Client) Compile(ctx context.Context, snapshot domain.ProjectSnapshot) (
 		Data domain.BuildVerification `json:"data"`
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 64*1024))
-	if err = decoder.Decode(&envelope); err != nil || envelope.Data.Toolchain == "" || envelope.Data.DurationMS < 0 || envelope.Data.ArtifactID != artifactID {
+	if err = decoder.Decode(&envelope); err != nil || envelope.Data.Toolchain == "" || envelope.Data.DurationMS < 0 || !artifactIDPattern.MatchString(envelope.Data.ArtifactID) {
 		return domain.BuildVerification{}, fmt.Errorf("invalid builder response")
 	}
 	return envelope.Data, nil
