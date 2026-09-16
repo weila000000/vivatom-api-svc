@@ -1,5 +1,5 @@
 import { createServer } from "node:http"
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { dirname, join } from "node:path"
@@ -20,6 +20,14 @@ function log(level, event, fields = {}) {
 
 function safePath(path) {
   return /^\/src\/[A-Za-z0-9_./-]+\.(vue|ts|js|tsx|jsx|css|json)$/.test(path) && !path.includes("..")
+}
+
+function sanitizeDiagnostic(value, workspaces = []) {
+  let diagnostic = String(value).replaceAll(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+  for (const workspace of workspaces.filter(Boolean).sort((left, right) => right.length - left.length)) {
+    diagnostic = diagnostic.replaceAll(workspace, "<workspace>")
+  }
+  return diagnostic.replaceAll(workerRoot, "<worker>").trim().slice(-4000)
 }
 
 async function readJSON(request) {
@@ -45,6 +53,7 @@ async function compile(snapshot, requestId) {
   log("info", "compile_started", { requestId, entryFile: snapshot.entryFile, fileCount: paths.length, sourceBytes })
   const directory = await mkdtemp(join(tmpdir(), "vivatom-build-"))
   try {
+    const canonicalDirectory = await realpath(directory)
     await symlink(join(workerRoot, "node_modules"), join(directory, "node_modules"), "dir")
     await writeFile(join(directory, "index.html"), `<div id="app"></div><script type="module" src="${snapshot.entryFile}"></script>`)
     for (const [path, source] of Object.entries(snapshot.files)) {
@@ -53,14 +62,14 @@ async function compile(snapshot, requestId) {
       await mkdir(dirname(target), { recursive: true })
       await writeFile(target, source)
     }
-    await runVite(directory, snapshot.entryFile, requestId)
+    await runVite(directory, canonicalDirectory, snapshot.entryFile, requestId)
   } finally {
     await rm(directory, { recursive: true, force: true })
     log("info", "workspace_removed", { requestId })
   }
 }
 
-function runVite(directory, entryFile, requestId) {
+function runVite(directory, canonicalDirectory, entryFile, requestId) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now()
     const child = spawn(process.execPath, [join(workerRoot, "runner.mjs"), directory, entryFile], {
@@ -85,7 +94,7 @@ function runVite(directory, entryFile, requestId) {
     child.once("exit", (code) => {
       clearTimeout(timer)
       const durationMs = Date.now() - startedAt
-      const buildOutput = output.trim().slice(-4000)
+      const buildOutput = sanitizeDiagnostic(output, [directory, canonicalDirectory])
       if (code === 0) {
         log("info", "vite_completed", { requestId, pid: child.pid, code, durationMs, output: buildOutput })
         resolve()
@@ -125,7 +134,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
     log("info", "request_completed", { requestId, status: 200, durationMs: Date.now() - requestStartedAt, toolchain })
   } catch (error) {
-    const diagnostic = String(error).slice(0, 4000)
+    const diagnostic = sanitizeDiagnostic(error)
     log("error", "compile_failed", { requestId, status: 422, durationMs: Date.now() - requestStartedAt, error: diagnostic })
     const payload = JSON.stringify({ error: "compile_failed", diagnostic })
     response.writeHead(422, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
