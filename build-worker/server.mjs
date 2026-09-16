@@ -8,6 +8,7 @@ import { tmpdir } from "node:os"
 import { artifactETag, matchesIfNoneMatch } from "./preview-http.mjs"
 import { previewSecurityHeaders } from "./preview-security.mjs"
 import { hashSnapshot } from "./snapshot-hash.mjs"
+import { verifyToolchain } from "./toolchain.mjs"
 
 const controlPort = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
 const previewPort = Number(process.env.VIVATOM_PREVIEW_PORT || 8091)
@@ -18,7 +19,6 @@ const maxArtifactFiles = 128
 const maxArtifactFileBytes = 4 * 1024 * 1024
 const maxArtifactBytes = 8 * 1024 * 1024
 const timeoutMs = 45_000
-const toolchain = "vite@7.3.6+vue@3.5.42"
 const maxConcurrentBuilds = Number(process.env.VIVATOM_BUILDER_CONCURRENCY || 2)
 const workerRoot = dirname(new URL(import.meta.url).pathname)
 const artifactRoot = resolve(process.env.VIVATOM_ARTIFACT_ROOT || join(workerRoot, ".data", "artifacts"))
@@ -68,6 +68,7 @@ async function checkReady() {
   await Promise.all([
     access(join(workerRoot, "runner.mjs"), constants.R_OK),
     access(artifactRoot, constants.R_OK | constants.W_OK),
+    verifyToolchain(workerRoot),
   ])
 }
 
@@ -165,6 +166,7 @@ async function compile(snapshot, snapshotHash, requestId, signal) {
   }
   if (!/^[a-f0-9]{64}$/.test(snapshotHash)) throw new Error("invalid_snapshot_hash")
   if (hashSnapshot(snapshot) !== snapshotHash) throw new Error("snapshot_hash_mismatch")
+  const toolchain = await verifyToolchain(workerRoot)
   const paths = Object.keys(snapshot.files)
   if (!paths.length || paths.length > 80 || paths.some((path) => !safePath(path)) || !paths.includes(snapshot.entryFile)) {
     throw new Error("invalid_snapshot")
@@ -188,7 +190,7 @@ async function compile(snapshot, snapshotHash, requestId, signal) {
     const dist = join(directory, "dist")
     const artifact = await inspectArtifact(dist)
     await persistArtifact(dist, artifact, requestId)
-    return artifact.artifactId
+    return { artifactId: artifact.artifactId, toolchain }
   } finally {
     await rm(directory, { recursive: true, force: true })
     log("info", "workspace_removed", { requestId })
@@ -377,7 +379,7 @@ const controlServer = createServer(async (request, response) => {
       return
     }
     const startedAt = Date.now()
-    const artifactId = await compile(body.snapshot, body.snapshotHash, requestId, cancellation.signal)
+    const { artifactId, toolchain } = await compile(body.snapshot, body.snapshotHash, requestId, cancellation.signal)
     const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt, artifactId } })
     response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
     log("info", "request_completed", { requestId, status: 200, durationMs: Date.now() - requestStartedAt, toolchain })
@@ -402,7 +404,7 @@ const controlServer = createServer(async (request, response) => {
     }
   }
 }).listen(controlPort, "0.0.0.0", () => {
-  log("info", "builder_started", { controlPort, previewPort, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, maxArtifactFiles, maxArtifactFileBytes, maxArtifactBytes, timeoutMs, maxConcurrentBuilds })
+  log("info", "builder_started", { controlPort, previewPort, artifactRoot, maxBodyBytes, maxOutputBytes, maxArtifactFiles, maxArtifactFileBytes, maxArtifactBytes, timeoutMs, maxConcurrentBuilds })
 })
 
 const previewServer = createServer(async (request, response) => {
