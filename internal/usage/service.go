@@ -184,6 +184,9 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	if result == ResultForbidden {
 		return Version{}, &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
 	}
+	if result == ResultSafetyRejected {
+		return Version{}, &Error{Code: "candidate_unsafe", Status: http.StatusUnprocessableEntity}
+	}
 	if result == ResultCandidateInvalid || snapshot == nil {
 		return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
 	}
@@ -258,6 +261,9 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 	}
 	if result == ResultVersionConflict {
 		return Version{}, &Error{Code: "version_conflict", Status: http.StatusConflict}
+	}
+	if result == ResultSafetyRejected {
+		return Version{}, &Error{Code: "candidate_unsafe", Status: http.StatusUnprocessableEntity}
 	}
 	if result == ResultCandidateInvalid || version == nil {
 		return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}

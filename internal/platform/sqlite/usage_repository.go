@@ -84,6 +84,10 @@ func (r *UsageRepository) RecoverInterrupted(ctx context.Context, completedAt st
 }
 
 func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accountID, projectID, usageID, prompt string, snapshot domain.ProjectSnapshot, createdAt string) (string, string, error) {
+	snapshot, err := generation.NewGuard().Check(snapshot)
+	if err != nil {
+		return "", "", err
+	}
 	snapshotHash, payload, err := domain.HashSnapshot(snapshot)
 	if err != nil {
 		return "", "", err
@@ -125,8 +129,8 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 	if member == 0 {
 		return nil, usage.ResultForbidden, nil
 	}
-	var payload string
-	err := r.db.QueryRowContext(ctx, `SELECT snapshot_json FROM build_candidates WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND prompt=? AND status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash, prompt).Scan(&payload)
+	var payload, safetyPolicy string
+	err := r.db.QueryRowContext(ctx, `SELECT c.snapshot_json,coalesce(s.policy,'') FROM build_candidates c LEFT JOIN safety_verifications s ON s.candidate_id=c.id AND s.snapshot_hash=c.snapshot_hash WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.snapshot_hash=? AND c.prompt=? AND c.status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash, prompt).Scan(&payload, &safetyPolicy)
 	if err == sql.ErrNoRows {
 		return nil, usage.ResultCandidateInvalid, nil
 	}
@@ -139,6 +143,11 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 	}
 	if calculatedHash, _, hashErr := domain.HashSnapshot(snapshot); hashErr != nil || calculatedHash != snapshotHash {
 		return nil, usage.ResultCandidateInvalid, hashErr
+	}
+	guarded, guardErr := generation.NewGuard().Check(snapshot)
+	guardedHash, _, hashErr := domain.HashSnapshot(guarded)
+	if safetyPolicy != generation.PolicyVersion || guardErr != nil || hashErr != nil || guardedHash != snapshotHash {
+		return nil, usage.ResultSafetyRejected, nil
 	}
 	return &snapshot, usage.ResultOK, nil
 }
@@ -363,6 +372,11 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	}
 	if calculatedHash, _, hashErr := domain.HashSnapshot(snapshot); hashErr != nil || calculatedHash != storedHash {
 		return nil, usage.ResultCandidateInvalid, hashErr
+	}
+	guarded, guardErr := generation.NewGuard().Check(snapshot)
+	guardedHash, _, hashErr := domain.HashSnapshot(guarded)
+	if safetyPolicy != generation.PolicyVersion || guardErr != nil || hashErr != nil || guardedHash != storedHash {
+		return nil, usage.ResultSafetyRejected, nil
 	}
 	var activeVersion sql.NullString
 	if err = tx.QueryRowContext(ctx, `SELECT active_version_id FROM workspace_projects WHERE id=? AND workspace_id=?`, projectID, workspaceID).Scan(&activeVersion); err == sql.ErrNoRows {

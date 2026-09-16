@@ -135,6 +135,15 @@ func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
 	if firstStatus != "rejected" || secondStatus != "pending" {
 		t.Fatalf("candidate statuses: first=%q second=%q", firstStatus, secondStatus)
 	}
+	if _, err = database.Exec(`UPDATE safety_verifications SET policy='snapshot-guard/v1' WHERE candidate_id=?`, secondID); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, result, loadErr := repository.LoadCandidate(ctx, owner.User.ID, workspaceID, "project-1", secondID, firstHash, "second"); loadErr != nil || result != usage.ResultSafetyRejected || loaded != nil {
+		t.Fatalf("stale safety policy loaded: snapshot=%+v result=%q err=%v", loaded, result, loadErr)
+	}
+	if _, err = database.Exec(`UPDATE safety_verifications SET policy=? WHERE candidate_id=?`, generation.PolicyVersion, secondID); err != nil {
+		t.Fatal(err)
+	}
 	var leases int
 	if err = database.QueryRow(`SELECT count(*) FROM candidate_compile_leases WHERE candidate_id=?`, firstID).Scan(&leases); err != nil || leases != 0 {
 		t.Fatalf("superseded candidate leases=%d err=%v", leases, err)
@@ -147,6 +156,11 @@ func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
 	}
 	if loaded, result, loadErr := repository.LoadCandidate(ctx, owner.User.ID, workspaceID, "project-1", secondID, firstHash, "second"); loadErr != nil || result != usage.ResultCandidateInvalid || loaded != nil {
 		t.Fatalf("tampered candidate loaded: snapshot=%+v result=%q err=%v", loaded, result, loadErr)
+	}
+	unsafe := snapshot
+	unsafe.Files = map[string]string{"/src/main.ts": `fetch("https://example.test")`}
+	if _, _, unsafeErr := repository.StoreCandidate(ctx, workspaceID, owner.User.ID, "project-1", usageID, "unsafe", unsafe, "2026-01-01T00:03:00Z"); unsafeErr == nil {
+		t.Fatal("expected unsafe candidate storage to fail")
 	}
 }
 
@@ -247,6 +261,17 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			t.Fatalf("candidate was not persisted: hash=%q err=%v", storedHash, err)
 		}
 		if index == 0 {
+			if _, err = database.Exec(`UPDATE safety_verifications SET policy='snapshot-guard/v1' WHERE candidate_id=?`, candidateID); err != nil {
+				t.Fatal(err)
+			}
+			_, unsafeCandidateErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
+			assertUsageCode(t, unsafeCandidateErr, "candidate_unsafe")
+			if compiler.calls != 0 {
+				t.Fatalf("unsafe candidate invoked compiler %d times", compiler.calls)
+			}
+			if _, err = database.Exec(`UPDATE safety_verifications SET policy=? WHERE candidate_id=?`, generation.PolicyVersion, candidateID); err != nil {
+				t.Fatal(err)
+			}
 			_, promptErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "changed prompt")
 			assertUsageCode(t, promptErr, "candidate_invalid")
 			version, commitErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "build")
