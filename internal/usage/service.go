@@ -141,6 +141,7 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		resultCode := ""
 		sawDone := false
 		invalidStream := false
+		var deliverable *domain.AgentEvent
 		emit := func(event domain.AgentEvent) bool {
 			select {
 			case output <- event:
@@ -163,24 +164,16 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 				invalidStream = true
 				continue
 			}
-			if event.Type == "approval.required" && event.Plan != nil {
-				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, request.Prompt, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
-				if err != nil {
-					status = "failed"
-					event = domain.AgentEvent{Type: "error", Code: "approval_unavailable", Message: "方案暂时无法保存", Retryable: true}
-				} else {
-					event.ApprovalID = approvalID
+			if event.Type == "approval.required" || event.Type == "snapshot.completed" {
+				expected := request.Action == domain.ActionPlan && event.Type == "approval.required" && event.Plan != nil ||
+					request.Action != domain.ActionPlan && event.Type == "snapshot.completed" && event.Snapshot != nil
+				if !expected || deliverable != nil {
+					invalidStream = true
+					continue
 				}
-			}
-			if event.Type == "snapshot.completed" && event.Snapshot != nil {
-				candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, request.Prompt, *event.Snapshot, s.now().UTC().Format(time.RFC3339Nano))
-				if err != nil {
-					status = "failed"
-					event = domain.AgentEvent{Type: "error", Code: "candidate_unavailable", Message: "候选源码暂时无法存证", Retryable: true}
-				} else {
-					event.CandidateID = candidateID
-					event.SnapshotHash = snapshotHash
-				}
+				copy := event
+				deliverable = &copy
+				continue
 			}
 			if event.Type == "error" {
 				status = "failed"
@@ -206,6 +199,40 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 					_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
 					return
 				}
+			}
+		} else if status != "failed" && deliverable == nil {
+			status = "failed"
+			resultCode = "agent_result_missing"
+			if !emit(domain.AgentEvent{Type: "error", Code: resultCode, Message: "Agent 未产生本次任务所需的结果", Retryable: true}) {
+				_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
+				return
+			}
+		}
+		if status == "succeeded" && deliverable != nil {
+			event := *deliverable
+			if event.Type == "approval.required" {
+				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, request.Prompt, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
+				if err != nil {
+					status = "failed"
+					resultCode = "approval_unavailable"
+					event = domain.AgentEvent{Type: "error", Code: resultCode, Message: "方案暂时无法保存", Retryable: true}
+				} else {
+					event.ApprovalID = approvalID
+				}
+			} else {
+				candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, request.Prompt, *event.Snapshot, s.now().UTC().Format(time.RFC3339Nano))
+				if err != nil {
+					status = "failed"
+					resultCode = "candidate_unavailable"
+					event = domain.AgentEvent{Type: "error", Code: resultCode, Message: "候选源码暂时无法存证", Retryable: true}
+				} else {
+					event.CandidateID = candidateID
+					event.SnapshotHash = snapshotHash
+				}
+			}
+			if !emit(event) {
+				_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
+				return
 			}
 		}
 		if !emit(domain.AgentEvent{Type: "done"}) {

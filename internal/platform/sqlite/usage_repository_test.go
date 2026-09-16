@@ -33,6 +33,17 @@ func (trailingEventRunner) Run(context.Context, domain.AgentRequest) (<-chan dom
 	return events, nil
 }
 
+type scriptedRunner []domain.AgentEvent
+
+func (r scriptedRunner) Run(context.Context, domain.AgentRequest) (<-chan domain.AgentEvent, error) {
+	events := make(chan domain.AgentEvent, len(r))
+	for _, event := range r {
+		events <- event
+	}
+	close(events)
+	return events, nil
+}
+
 func TestUsageServiceFailsAnIncompleteAgentStream(t *testing.T) {
 	database, err := Open(":memory:")
 	if err != nil {
@@ -111,6 +122,53 @@ func TestUsageServiceRejectsEventsAfterDone(t *testing.T) {
 	}
 	if status != "failed" || resultCode != "agent_stream_invalid" || plans != 0 {
 		t.Fatalf("status=%q resultCode=%q plans=%d", status, resultCode, plans)
+	}
+}
+
+func TestUsageServiceRequiresExactlyOneActionResult(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	identityService := identity.NewService(NewIdentityRepository(database))
+	owner, err := identityService.Register(ctx, identity.Registration{Email: "result-contract@example.com", Password: "password-one", Name: "Owner", WorkspaceName: "Results"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := NewUsageRepository(database)
+	request := domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "project-1", Prompt: "build a task board"}
+
+	missing := usage.NewService(identityService, scriptedRunner{{Type: "done"}}, repository)
+	events, err := missing.Run(ctx, owner.Session.Token, owner.Workspaces[0].ID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received []string
+	for event := range events {
+		received = append(received, event.Type+":"+event.Code)
+	}
+	if strings.Join(received, ",") != "error:agent_result_missing,done:" {
+		t.Fatalf("missing result events = %v", received)
+	}
+
+	plan := domain.BuildPlan{ProductType: "web_app", ProductSummary: "Task board", DesignDirection: "Clear", Backend: domain.BackendSpec{Auth: "none"}}
+	duplicate := usage.NewService(identityService, scriptedRunner{{Type: "approval.required", Plan: &plan}, {Type: "approval.required", Plan: &plan}, {Type: "done"}}, repository)
+	events, err = duplicate.Run(ctx, owner.Session.Token, owner.Workspaces[0].ID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received = nil
+	for event := range events {
+		received = append(received, event.Type+":"+event.Code)
+	}
+	if strings.Join(received, ",") != "error:agent_stream_invalid,done:" {
+		t.Fatalf("duplicate result events = %v", received)
+	}
+	var plans int
+	if err = database.QueryRow(`SELECT count(*) FROM approved_plans`).Scan(&plans); err != nil || plans != 0 {
+		t.Fatalf("duplicate result persisted plans=%d err=%v", plans, err)
 	}
 }
 
