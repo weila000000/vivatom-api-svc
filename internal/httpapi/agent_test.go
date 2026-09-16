@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"vivatom-api-svc/internal/domain"
 )
@@ -63,5 +64,33 @@ func TestAgentRejectsInvalidRequest(t *testing.T) {
 	NewRouter(Dependencies{AgentRunner: stubRunner{}}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestAgentStreamKeepsConnectionAlive(t *testing.T) {
+	events := make(chan domain.AgentEvent)
+	heartbeats := make(chan time.Time, 1)
+	heartbeats <- time.Now()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		close(events)
+	}()
+
+	var output bytes.Buffer
+	flushes := 0
+	streamAgentEvents(context.Background(), &output, func() { flushes++ }, events, heartbeats)
+
+	stream := output.String()
+	if !strings.Contains(stream, ": keepalive\n\n") {
+		t.Fatalf("stream has no heartbeat: %q", stream)
+	}
+	if !strings.Contains(stream, "event: error\ndata: {\"type\":\"error\",\"message\":\"Agent 事件流意外中断\",\"code\":\"agent_stream_incomplete\",\"retryable\":true}") {
+		t.Fatalf("stream has no incomplete error: %q", stream)
+	}
+	if !strings.HasSuffix(stream, "event: done\ndata: {\"type\":\"done\"}\n\n") {
+		t.Fatalf("stream has no terminal event: %q", stream)
+	}
+	if flushes != 3 {
+		t.Fatalf("flushes = %d, want 3", flushes)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"vivatom-api-svc/internal/domain"
@@ -14,6 +15,7 @@ import (
 )
 
 const maxAgentRequestBytes = 2 << 20
+const agentHeartbeatInterval = 15 * time.Second
 
 type AgentRunner interface {
 	Run(context.Context, domain.AgentRequest) (<-chan domain.AgentEvent, error)
@@ -66,20 +68,60 @@ func (h agentHandler) run(c *gin.Context) {
 	}
 
 	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
+	c.Header("Cache-Control", "no-cache, no-transform")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
+	if _, err := io.WriteString(c.Writer, ": connected\n\n"); err != nil {
+		return
+	}
+	c.Writer.Flush()
 
-	for event := range events {
+	heartbeat := time.NewTicker(agentHeartbeatInterval)
+	defer heartbeat.Stop()
+	streamAgentEvents(c.Request.Context(), c.Writer, c.Writer.Flush, events, heartbeat.C)
+}
+
+func streamAgentEvents(ctx context.Context, writer io.Writer, flush func(), events <-chan domain.AgentEvent, heartbeats <-chan time.Time) {
+	sawDone := false
+	writeEvent := func(event domain.AgentEvent) bool {
 		payload, err := json.Marshal(event)
 		if err != nil {
-			continue
+			return false
 		}
-		if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event.Type, payload); err != nil {
+		if _, err := fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event.Type, payload); err != nil {
+			return false
+		}
+		flush()
+		return true
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case <-heartbeats:
+			if _, err := io.WriteString(writer, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flush()
+		case event, ok := <-events:
+			if !ok {
+				if !sawDone && ctx.Err() == nil {
+					if !writeEvent(domain.AgentEvent{Type: "error", Code: "agent_stream_incomplete", Message: "Agent 事件流意外中断", Retryable: true}) {
+						return
+					}
+					writeEvent(domain.AgentEvent{Type: "done"})
+				}
+				return
+			}
+			if event.Type == "done" {
+				sawDone = true
+			}
+			if !writeEvent(event) {
+				return
+			}
 		}
-		c.Writer.Flush()
 	}
 }
 
