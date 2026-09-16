@@ -28,6 +28,19 @@ const requestType = "vivatom:runtime-request"
 const responseType = "vivatom:runtime-response"
 const sessionKey = "vivatom-session-" + projectId
 let sequence = 0
+let memorySession: string | undefined
+
+function readSession() {
+  try { return localStorage.getItem(sessionKey) ?? memorySession } catch { return memorySession }
+}
+
+function writeSession(token?: string) {
+  memorySession = token
+  try {
+    if (token) localStorage.setItem(sessionKey, token)
+    else localStorage.removeItem(sessionKey)
+  } catch {}
+}
 
 export class RuntimeClientError extends Error {
   constructor(readonly code: string, message: string, readonly status: number) {
@@ -55,13 +68,13 @@ function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
       })
     }
     window.addEventListener("message", receive)
-    window.parent.postMessage({ type: requestType, id, projectId, path, method, body, sessionToken: localStorage.getItem(sessionKey) ?? undefined }, "*")
+    window.parent.postMessage({ type: requestType, id, projectId, path, method, body, sessionToken: readSession() }, "*")
   })
 }
 
 async function authenticate(action: "register" | "login", email: string, password: string) {
   const result = await request<{ user: unknown; token: string; expiresAt: string }>("/auth/" + action, "POST", { email, password })
-  localStorage.setItem(sessionKey, result.token)
+  writeSession(result.token)
   return result
 }
 
@@ -69,7 +82,7 @@ export const vivatomRuntime = {
   register: (email: string, password: string) => authenticate("register", email, password),
   login: (email: string, password: string) => authenticate("login", email, password),
   me: () => request("/auth/me"),
-  logout: async () => { await request("/auth/logout", "POST"); localStorage.removeItem(sessionKey) },
+  logout: async () => { await request("/auth/logout", "POST"); writeSession() },
   list: <T = Record<string, unknown>>(collection: string) => request<T[]>("/collections/" + encodeURIComponent(collection)),
   create: <T = Record<string, unknown>>(collection: string, data: Record<string, unknown>) => request<T>("/collections/" + encodeURIComponent(collection), "POST", data),
   update: <T = Record<string, unknown>>(collection: string, id: string, data: Record<string, unknown>) => request<T>("/collections/" + encodeURIComponent(collection) + "/" + encodeURIComponent(id), "PATCH", data),

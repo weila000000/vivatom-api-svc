@@ -22,6 +22,9 @@ func TestInjectRuntimeSDKAddsControlledBridgeClient(t *testing.T) {
 			t.Fatalf("runtime SDK contains forbidden capability %q", forbidden)
 		}
 	}
+	if !strings.Contains(source, "memorySession") || !strings.Contains(source, "try { return localStorage") {
+		t.Fatal("runtime SDK does not tolerate opaque-origin storage")
+	}
 	if _, exists := snapshot.Files[RuntimeSDKPath]; exists {
 		t.Fatal("injection mutated provider snapshot")
 	}
