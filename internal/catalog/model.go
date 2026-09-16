@@ -29,12 +29,20 @@ type DocumentProject struct {
 	ID              string            `json:"id"`
 	WorkspaceID     string            `json:"workspaceId"`
 	Title           string            `json:"title"`
+	Mode            domain.WorkMode   `json:"mode,omitempty"`
 	Status          string            `json:"status"`
 	Plan            *domain.BuildPlan `json:"plan,omitempty"`
 	ApprovalID      *string           `json:"approvalId,omitempty"`
 	ActiveVersionID *string           `json:"activeVersionId,omitempty"`
+	Runtime         *DocumentRuntime  `json:"runtime,omitempty"`
 	CreatedAt       string            `json:"createdAt"`
 	UpdatedAt       string            `json:"updatedAt"`
+}
+
+type DocumentRuntime struct {
+	PublicKey     string `json:"publicKey"`
+	AdminToken    string `json:"adminToken"`
+	SchemaVersion int    `json:"schemaVersion"`
 }
 
 type DocumentMessage struct {

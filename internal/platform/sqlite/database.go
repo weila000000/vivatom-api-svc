@@ -138,7 +138,7 @@ func migrate(db *sql.DB) error {
 			account_id TEXT NOT NULL,
 			project_id TEXT NOT NULL,
 			approval_id TEXT,
-			action TEXT NOT NULL CHECK(action IN ('plan','build','iterate','repair','polish')),
+			action TEXT NOT NULL CHECK(action IN ('plan','build','iterate','repair','race','polish')),
 			credits INTEGER NOT NULL CHECK(credits > 0),
 			status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')),
 			created_at TEXT NOT NULL,
@@ -436,7 +436,7 @@ func migrateAgentUsageActions(db *sql.DB) error {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_usage'`).Scan(&schema); err != nil {
 		return err
 	}
-	if strings.Contains(schema, "'iterate'") {
+	if strings.Contains(schema, "'iterate'") && strings.Contains(schema, "'race'") {
 		return nil
 	}
 	_, err := db.Exec(`
@@ -444,14 +444,14 @@ func migrateAgentUsageActions(db *sql.DB) error {
 		CREATE TABLE agent_usage (
 			id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, account_id TEXT NOT NULL, project_id TEXT NOT NULL,
 			approval_id TEXT,
-			action TEXT NOT NULL CHECK(action IN ('plan','build','iterate','repair','polish')),
+			action TEXT NOT NULL CHECK(action IN ('plan','build','iterate','repair','race','polish')),
 			credits INTEGER NOT NULL CHECK(credits > 0), status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')),
 			created_at TEXT NOT NULL, completed_at TEXT,
 			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
 			FOREIGN KEY(account_id) REFERENCES tenant_accounts(id)
 		);
-		INSERT INTO agent_usage (id,workspace_id,account_id,project_id,action,credits,status,created_at,completed_at)
-			SELECT id,workspace_id,account_id,project_id,action,credits,status,created_at,completed_at FROM agent_usage_legacy;
+		INSERT INTO agent_usage (id,workspace_id,account_id,project_id,approval_id,action,credits,status,created_at,completed_at)
+			SELECT id,workspace_id,account_id,project_id,approval_id,action,credits,status,created_at,completed_at FROM agent_usage_legacy;
 		DROP TABLE agent_usage_legacy;
 		CREATE INDEX agent_usage_workspace ON agent_usage(workspace_id, created_at DESC);
 	`)

@@ -131,9 +131,11 @@ type AgentEvent struct {
 }
 
 type RaceCandidate struct {
-	ID        string          `json:"id"`
-	Direction string          `json:"direction"`
-	Snapshot  ProjectSnapshot `json:"snapshot"`
+	ID           string          `json:"id"`
+	Direction    string          `json:"direction"`
+	Snapshot     ProjectSnapshot `json:"snapshot"`
+	CandidateID  string          `json:"candidateId,omitempty"`
+	SnapshotHash string          `json:"snapshotHash,omitempty"`
 }
 
 func (r AgentRequest) Validate() error {

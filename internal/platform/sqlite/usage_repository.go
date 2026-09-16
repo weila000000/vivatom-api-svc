@@ -97,10 +97,10 @@ func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accou
 		return "", "", err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM candidate_compile_leases WHERE candidate_id IN (SELECT id FROM build_candidates WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending')`, workspaceID, accountID, projectID); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM candidate_compile_leases WHERE candidate_id IN (SELECT id FROM build_candidates WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending') AND NOT EXISTS (SELECT 1 FROM agent_usage WHERE id=? AND action='race')`, workspaceID, accountID, projectID, usageID); err != nil {
 		return "", "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, workspaceID, accountID, projectID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM agent_usage WHERE id=? AND action='race')`, workspaceID, accountID, projectID, usageID); err != nil {
 		return "", "", err
 	}
 	var id string

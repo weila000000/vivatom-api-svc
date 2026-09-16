@@ -166,7 +166,8 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 			}
 			if event.Type == "approval.required" || event.Type == "snapshot.completed" {
 				expected := request.Action == domain.ActionPlan && event.Type == "approval.required" && event.Plan != nil ||
-					request.Action != domain.ActionPlan && event.Type == "snapshot.completed" && event.Snapshot != nil
+					request.Action == domain.ActionRace && event.Type == "snapshot.completed" && len(event.Candidates) > 0 ||
+					request.Action != domain.ActionPlan && request.Action != domain.ActionRace && event.Type == "snapshot.completed" && event.Snapshot != nil
 				if !expected || deliverable != nil {
 					invalidStream = true
 					continue
@@ -215,6 +216,12 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 				contractErr = domain.ValidateBuildPlan(*event.Plan)
 			} else if request.Action == domain.ActionBuild {
 				contractErr = domain.ValidateBuildContract(*request.Plan, *event.Snapshot)
+			} else if request.Action == domain.ActionRace {
+				for index := range event.Candidates {
+					if contractErr = domain.ValidateBuildContract(*request.Plan, event.Candidates[index].Snapshot); contractErr != nil {
+						break
+					}
+				}
 			} else {
 				contractErr = domain.ValidateRevisionContract(*request.Snapshot, *event.Snapshot)
 			}
@@ -234,6 +241,18 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 					event = domain.AgentEvent{Type: "error", Code: resultCode, Message: "方案暂时无法保存", Retryable: true}
 				} else {
 					event.ApprovalID = approvalID
+				}
+			} else if status == "succeeded" && request.Action == domain.ActionRace {
+				for index := range event.Candidates {
+					candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, request.Prompt, event.Candidates[index].Snapshot, s.now().UTC().Format(time.RFC3339Nano))
+					if err != nil {
+						status = "failed"
+						resultCode = "candidate_unavailable"
+						event = domain.AgentEvent{Type: "error", Code: resultCode, Message: "Race 候选源码暂时无法存证", Retryable: true}
+						break
+					}
+					event.Candidates[index].CandidateID = candidateID
+					event.Candidates[index].SnapshotHash = snapshotHash
 				}
 			} else if status == "succeeded" {
 				candidateID, snapshotHash, err := s.repository.StoreCandidate(context.Background(), workspaceID, account.ID, request.ProjectID, usageID, request.Prompt, *event.Snapshot, s.now().UTC().Format(time.RFC3339Nano))
@@ -433,6 +452,9 @@ func (s *Service) account(ctx context.Context, token string) (identity.Account, 
 func actionCost(action domain.AgentAction) int {
 	if action == domain.ActionPlan {
 		return 1
+	}
+	if action == domain.ActionRace {
+		return 8
 	}
 	if action == domain.ActionBuild || action == domain.ActionIterate || action == domain.ActionRepair || action == domain.ActionPolish {
 		return 4
