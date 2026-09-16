@@ -36,11 +36,13 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 	}
 
 	failed := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(writer, `{"error":"compile_failed","diagnostic":"App.vue:12 unexpected token"}`)
 	}))
 	defer failed.Close()
-	if _, err := NewClient(failed.URL, "secret", time.Second).Compile(context.Background(), domain.ProjectSnapshot{}); err == nil {
-		t.Fatal("expected compiler failure")
+	if _, err := NewClient(failed.URL, "secret", time.Second).Compile(context.Background(), domain.ProjectSnapshot{}); err == nil || err.Error() != "App.vue:12 unexpected token" {
+		t.Fatalf("expected compiler diagnostic, got %v", err)
 	}
 }
 

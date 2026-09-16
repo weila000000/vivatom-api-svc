@@ -125,8 +125,10 @@ const server = createServer(async (request, response) => {
     response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
     log("info", "request_completed", { requestId, status: 200, durationMs: Date.now() - requestStartedAt, toolchain })
   } catch (error) {
-    log("error", "compile_failed", { requestId, status: 422, durationMs: Date.now() - requestStartedAt, error: String(error).slice(0, 4000) })
-    response.writeHead(422, { "Content-Type": "application/json" }).end('{"error":"compile_failed"}')
+    const diagnostic = String(error).slice(0, 4000)
+    log("error", "compile_failed", { requestId, status: 422, durationMs: Date.now() - requestStartedAt, error: diagnostic })
+    const payload = JSON.stringify({ error: "compile_failed", diagnostic })
+    response.writeHead(422, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
   }
 }).listen(port, "0.0.0.0", () => {
   log("info", "builder_started", { port, toolchain, maxBodyBytes, maxOutputBytes, timeoutMs })

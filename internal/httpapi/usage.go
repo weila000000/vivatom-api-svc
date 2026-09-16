@@ -105,5 +105,9 @@ func writeUsageError(c *gin.Context, err error) {
 		safe = &usage.Error{Code: "usage_unavailable", Status: 503}
 	}
 	messages := map[string]string{"unauthorized": "登录已失效，请重新登录", "workspace_forbidden": "无权访问该工作区", "approval_invalid": "审批凭证无效或已使用", "candidate_invalid": "候选源码凭证无效或已提交", "version_conflict": "项目已发布更新，请同步后重新构建", "version_untrusted": "该历史版本没有可信的服务端产物记录", "compile_failed": "候选源码未通过服务端隔离编译", "compiler_unavailable": "隔离编译服务暂时不可用", "invalid_request": "提交版本的请求不符合协议", "usage_unavailable": "用量服务暂时不可用"}
-	c.JSON(safe.Status, gin.H{"error": gin.H{"code": safe.Code, "message": messages[safe.Code]}})
+	message := messages[safe.Code]
+	if safe.Code == "compile_failed" && safe.Message != "" {
+		message += "：" + safe.Message
+	}
+	c.JSON(safe.Status, gin.H{"error": gin.H{"code": safe.Code, "message": message}})
 }

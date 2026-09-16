@@ -43,8 +43,9 @@ const (
 )
 
 type Error struct {
-	Code   string
-	Status int
+	Code    string
+	Status  int
+	Message string
 }
 
 func (e *Error) Error() string { return e.Code }

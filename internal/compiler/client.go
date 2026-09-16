@@ -19,9 +19,16 @@ type Client struct {
 	httpClient *http.Client
 }
 
-type RejectedError struct{}
+type RejectedError struct {
+	Diagnostic string
+}
 
-func (RejectedError) Error() string         { return "build rejected" }
+func (e RejectedError) Error() string {
+	if e.Diagnostic != "" {
+		return e.Diagnostic
+	}
+	return "build rejected"
+}
 func (RejectedError) CompileRejected() bool { return true }
 
 func NewClient(url, token string, timeout time.Duration) *Client {
@@ -64,8 +71,11 @@ func (c *Client) Compile(ctx context.Context, snapshot domain.ProjectSnapshot) (
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusUnprocessableEntity {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
-		return domain.BuildVerification{}, RejectedError{}
+		var failure struct {
+			Diagnostic string `json:"diagnostic"`
+		}
+		_ = json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&failure)
+		return domain.BuildVerification{}, RejectedError{Diagnostic: strings.TrimSpace(failure.Diagnostic)}
 	}
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))

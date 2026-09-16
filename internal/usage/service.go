@@ -192,8 +192,10 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 		verification, compileErr := s.compiler.Compile(ctx, *snapshot)
 		if compileErr != nil {
 			resultCode := "compiler_unavailable"
+			diagnostic := ""
 			if rejected, ok := compileErr.(rejectedCompilation); ok && rejected.CompileRejected() {
 				resultCode = "compile_failed"
+				diagnostic = strings.TrimSpace(compileErr.Error())
 			}
 			recorded, recordErr := s.repository.RecordBuildFailure(ctx, account.ID, workspaceID, projectID, candidateID, snapshotHash, resultCode, s.now().UTC().Format(time.RFC3339Nano))
 			if recordErr != nil {
@@ -203,7 +205,7 @@ func (s *Service) CommitCandidate(ctx context.Context, token, workspaceID, proje
 				return Version{}, &Error{Code: "candidate_invalid", Status: http.StatusConflict}
 			}
 			if resultCode == "compile_failed" {
-				return Version{}, &Error{Code: resultCode, Status: http.StatusUnprocessableEntity}
+				return Version{}, &Error{Code: resultCode, Status: http.StatusUnprocessableEntity, Message: diagnostic}
 			}
 			return Version{}, &Error{Code: resultCode, Status: http.StatusServiceUnavailable}
 		}
