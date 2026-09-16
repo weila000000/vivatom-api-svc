@@ -161,7 +161,7 @@ func (h runtimeHandler) logout(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "no-store")
-	c.Status(http.StatusNoContent)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"loggedOut": true}})
 }
 
 func (h runtimeHandler) collection(c *gin.Context) {
