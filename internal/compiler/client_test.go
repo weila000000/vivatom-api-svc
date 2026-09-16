@@ -43,3 +43,45 @@ func TestClientAuthenticatesAndRequiresSuccessfulBuild(t *testing.T) {
 		t.Fatal("expected compiler failure")
 	}
 }
+
+func TestClientChecksBuilderReadiness(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/health" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := NewClient(server.URL, "secret", time.Second).Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientRejectsUnhealthyBuilder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	err := NewClient(server.URL, "secret", time.Second).Ready(context.Background())
+	if err == nil {
+		t.Fatal("expected readiness failure")
+	}
+}
+
+func TestClientHonorsReadinessContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		<-time.After(100 * time.Millisecond)
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := NewClient(server.URL, "secret", time.Second).Ready(ctx)
+	if err == nil {
+		t.Fatal("expected readiness timeout")
+	}
+}

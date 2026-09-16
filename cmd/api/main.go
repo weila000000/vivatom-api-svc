@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"vivatom-api-svc/internal/agent"
 	"vivatom-api-svc/internal/ai"
@@ -52,8 +53,16 @@ func main() {
 	auditService := audit.NewService(identityService, sqlite.NewAuditRepository(database))
 	buildCompiler := compiler.NewClient(config.BuilderURL, config.BuilderToken, config.BuilderTimeout)
 	usageService := usage.NewService(identityService, orchestrator, sqlite.NewUsageRepository(database), buildCompiler)
+	databaseReady := sqlite.ReadyCheck(database)
 	router := httpapi.NewRouter(httpapi.Dependencies{
-		Ready:           sqlite.ReadyCheck(database),
+		Ready: func() error {
+			if err := databaseReady(); err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			return buildCompiler.Ready(ctx)
+		},
 		AgentRunner:     usageService,
 		Usage:           usageService,
 		Runtime:         runtimeService,

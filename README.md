@@ -33,6 +33,8 @@ docker compose up --build
 
 Build Worker 向标准输出写入 JSON 日志。启动、请求、Snapshot 元数据、Vite 子进程输出、编译耗时、拒绝原因、临时目录清理和优雅退出使用同一个 `requestId` 关联；源码与认证 Token 不会写入日志。
 
+`GET /api/health/live` 只表示 API 进程仍在运行；`GET /api/health/ready` 会同时检查 SQLite 和 Build Worker。Worker 未启动、退出或健康接口超时时，readiness 返回 `503`，前端会据此提示服务尚未就绪。
+
 ## Verification
 
 ```bash

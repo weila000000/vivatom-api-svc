@@ -28,6 +28,23 @@ func NewClient(url, token string, timeout time.Duration) *Client {
 	return &Client{url: strings.TrimRight(url, "/"), token: token, httpClient: &http.Client{Timeout: timeout}}
 }
 
+func (c *Client) Ready(ctx context.Context) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/health", nil)
+	if err != nil {
+		return fmt.Errorf("create builder readiness request: %w", err)
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("check builder readiness: %w", err)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4*1024))
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("builder readiness returned status %d", response.StatusCode)
+	}
+	return nil
+}
+
 func (c *Client) Compile(ctx context.Context, snapshot domain.ProjectSnapshot) (domain.BuildVerification, error) {
 	payload, err := json.Marshal(struct {
 		Snapshot domain.ProjectSnapshot `json:"snapshot"`
