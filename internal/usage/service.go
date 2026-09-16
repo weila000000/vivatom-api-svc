@@ -281,6 +281,9 @@ func (s *Service) RestageVersion(ctx context.Context, token, workspaceID, projec
 	if result == ResultForbidden {
 		return Candidate{}, &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
 	}
+	if result == ResultSafetyRejected {
+		return Candidate{}, &Error{Code: "version_unsafe", Status: http.StatusUnprocessableEntity}
+	}
 	if result == ResultCandidateInvalid || candidate == nil {
 		return Candidate{}, &Error{Code: "version_untrusted", Status: http.StatusConflict}
 	}

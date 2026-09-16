@@ -282,7 +282,7 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 				t.Fatalf("restage version: candidate=%+v err=%v", restaged, restageErr)
 			}
 			restoredVersion, restoredErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", restaged.ID, restaged.SnapshotHash, version.ID, restaged.Prompt)
-			if restoredErr != nil || restoredVersion.SourceAction != "restore" || restoredVersion.ApprovalID != "" || restoredVersion.Safety == nil || restoredVersion.Safety.Policy != version.Safety.Policy || restoredVersion.Safety.VerifiedAt != version.Safety.VerifiedAt {
+			if restoredErr != nil || restoredVersion.SourceAction != "restore" || restoredVersion.ApprovalID != "" || restoredVersion.Safety == nil || restoredVersion.Safety.Policy != generation.PolicyVersion || restoredVersion.Safety.VerifiedAt == "" {
 				t.Fatalf("restored version provenance: version=%+v err=%v", restoredVersion, restoredErr)
 			}
 			committedVersionID = restoredVersion.ID
@@ -290,6 +290,30 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			assertUsageCode(t, restageOtherErr, "workspace_forbidden")
 			_, missingVersionErr := service.RestageVersion(ctx, owner.Session.Token, workspaceID, "p1", "version_missing")
 			assertUsageCode(t, missingVersionErr, "version_untrusted")
+			unsafeSnapshot := version.Snapshot
+			unsafeSnapshot.Files[unsafeSnapshot.EntryFile] = `fetch("https://example.test")`
+			unsafeHash, unsafePayload, hashErr := domain.HashSnapshot(unsafeSnapshot)
+			if hashErr != nil {
+				t.Fatal(hashErr)
+			}
+			if _, err = database.Exec(`UPDATE immutable_versions SET snapshot_json=?,snapshot_hash=? WHERE id=?`, string(unsafePayload), unsafeHash, version.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = database.Exec(`UPDATE build_candidates SET snapshot_json=?,snapshot_hash=? WHERE id=?`, string(unsafePayload), unsafeHash, version.CandidateID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = database.Exec(`UPDATE build_verifications SET snapshot_hash=? WHERE candidate_id=?`, unsafeHash, version.CandidateID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = database.Exec(`UPDATE safety_verifications SET snapshot_hash=?,policy='snapshot-guard/v1' WHERE candidate_id=?`, unsafeHash, version.CandidateID); err != nil {
+				t.Fatal(err)
+			}
+			_, unsafeRestageErr := service.RestageVersion(ctx, owner.Session.Token, workspaceID, "p1", version.ID)
+			assertUsageCode(t, unsafeRestageErr, "version_unsafe")
+			var restagedCandidates int
+			if err = database.QueryRow(`SELECT count(*) FROM build_candidates WHERE usage_id=?`, "restore:"+version.ID).Scan(&restagedCandidates); err != nil || restagedCandidates != 1 {
+				t.Fatalf("unsafe restage created a candidate: count=%d err=%v", restagedCandidates, err)
+			}
 			_, changedErr := service.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, "", "changed prompt")
 			assertUsageCode(t, changedErr, "candidate_invalid")
 			_, reuseErr := service.Run(ctx, owner.Session.Token, workspaceID, domain.AgentRequest{Action: domain.ActionBuild, ProjectID: "p1", ApprovalID: approvalID, Prompt: "build"})

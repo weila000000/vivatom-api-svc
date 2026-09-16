@@ -279,8 +279,8 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	if _, err = tx.ExecContext(ctx, `UPDATE build_candidates SET status='rejected' WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending'`, workspaceID, accountID, projectID); err != nil {
 		return nil, "", err
 	}
-	var snapshotJSON, snapshotHash, safetyPolicy, safetyVerifiedAt string
-	if err = tx.QueryRowContext(ctx, `SELECT v.snapshot_json,v.snapshot_hash,s.policy,s.verified_at FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash JOIN safety_verifications s ON s.candidate_id=v.candidate_id AND s.snapshot_hash=v.snapshot_hash WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, versionID, workspaceID, projectID).Scan(&snapshotJSON, &snapshotHash, &safetyPolicy, &safetyVerifiedAt); err == sql.ErrNoRows {
+	var snapshotJSON, snapshotHash string
+	if err = tx.QueryRowContext(ctx, `SELECT v.snapshot_json,v.snapshot_hash FROM immutable_versions v JOIN build_verifications b ON b.candidate_id=v.candidate_id AND b.snapshot_hash=v.snapshot_hash JOIN safety_verifications s ON s.candidate_id=v.candidate_id AND s.snapshot_hash=v.snapshot_hash WHERE v.id=? AND v.workspace_id=? AND v.project_id=?`, versionID, workspaceID, projectID).Scan(&snapshotJSON, &snapshotHash); err == sql.ErrNoRows {
 		return nil, usage.ResultCandidateInvalid, nil
 	} else if err != nil {
 		return nil, "", err
@@ -292,15 +292,24 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	if calculatedHash, _, hashErr := domain.HashSnapshot(snapshot); hashErr != nil || calculatedHash != snapshotHash {
 		return nil, usage.ResultCandidateInvalid, hashErr
 	}
+	snapshot, err = generation.NewGuard().Check(snapshot)
+	if err != nil {
+		return nil, usage.ResultSafetyRejected, nil
+	}
+	snapshotHash, payload, err := domain.HashSnapshot(snapshot)
+	if err != nil {
+		return nil, "", err
+	}
+	snapshotJSON = string(payload)
 	prompt := "恢复历史版本：" + snapshot.Title
 	var candidateID string
 	if err = tx.QueryRowContext(ctx, `INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at) VALUES ('candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,?, 'pending',?) RETURNING id`, workspaceID, accountID, projectID, "restore:"+versionID, prompt, snapshotJSON, snapshotHash, createdAt).Scan(&candidateID); err != nil {
 		return nil, "", err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO safety_verifications (candidate_id,snapshot_hash,policy,verified_at) VALUES (?,?,?,?)`, candidateID, snapshotHash, safetyPolicy, safetyVerifiedAt); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO safety_verifications (candidate_id,snapshot_hash,policy,verified_at) VALUES (?,?,?,?)`, candidateID, snapshotHash, generation.PolicyVersion, createdAt); err != nil {
 		return nil, "", err
 	}
-	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.restaged", "project", projectID, createdAt, map[string]any{"sourceVersionId": versionID, "candidateId": candidateID}); err != nil {
+	if err = appendAudit(ctx, tx, workspaceID, accountID, "version.restaged", "project", projectID, createdAt, map[string]any{"sourceVersionId": versionID, "candidateId": candidateID, "safetyPolicy": generation.PolicyVersion}); err != nil {
 		return nil, "", err
 	}
 	if err = tx.Commit(); err != nil {

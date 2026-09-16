@@ -41,6 +41,7 @@ const (
 	ResultCandidateInvalid  Result = "candidate_invalid"
 	ResultCompileInProgress Result = "compile_in_progress"
 	ResultVersionConflict   Result = "version_conflict"
+	ResultSafetyRejected    Result = "safety_rejected"
 )
 
 type Error struct {
