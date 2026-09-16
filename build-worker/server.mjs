@@ -126,7 +126,8 @@ async function verifyArtifact(artifactId) {
   return artifact
 }
 
-async function compile(snapshot, snapshotHash, requestId) {
+async function compile(snapshot, snapshotHash, requestId, signal) {
+  if (signal.aborted) throw new Error("request_aborted")
   const dependencies = snapshot?.dependencies && Object.entries(snapshot.dependencies)
   if (!snapshot || !safePath(snapshot.entryFile) || !snapshot.files || dependencies?.length !== 1 || snapshot.dependencies.vue !== "3.5.42") {
     throw new Error("invalid_snapshot")
@@ -144,12 +145,14 @@ async function compile(snapshot, snapshotHash, requestId) {
     await symlink(join(workerRoot, "node_modules"), join(directory, "node_modules"), "dir")
     await writeFile(join(directory, "index.html"), `<div id="app"></div><script type="module" src="${snapshot.entryFile}"></script>`)
     for (const [path, source] of Object.entries(snapshot.files)) {
+      if (signal.aborted) throw new Error("request_aborted")
       if (typeof source !== "string" || Buffer.byteLength(source) > 256 * 1024) throw new Error("invalid_snapshot")
       const target = join(directory, path.slice(1))
       await mkdir(dirname(target), { recursive: true })
       await writeFile(target, source)
     }
-    await runVite(canonicalDirectory, canonicalDirectory, snapshot.entryFile, requestId)
+    await runVite(canonicalDirectory, canonicalDirectory, snapshot.entryFile, requestId, signal)
+    if (signal.aborted) throw new Error("request_aborted")
     const dist = join(directory, "dist")
     const artifact = await inspectArtifact(dist)
     await persistArtifact(dist, artifact, requestId)
@@ -213,8 +216,12 @@ async function serveArtifact(request, response, pathname) {
   return true
 }
 
-function runVite(directory, canonicalDirectory, entryFile, requestId) {
+function runVite(directory, canonicalDirectory, entryFile, requestId, signal) {
   return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error("request_aborted"))
+      return
+    }
     const startedAt = Date.now()
     const child = spawn(process.execPath, [join(workerRoot, "runner.mjs"), directory, entryFile], {
       cwd: directory,
@@ -226,26 +233,43 @@ function runVite(directory, canonicalDirectory, entryFile, requestId) {
     const collect = (chunk) => { if (output.length < maxOutputBytes) output += chunk.toString() }
     child.stdout.on("data", collect)
     child.stderr.on("data", collect)
+    let settled = false
+    const finish = (callback) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal.removeEventListener("abort", cancel)
+      callback()
+    }
+    const cancel = () => {
+      log("info", "vite_cancelled", { requestId, pid: child.pid, durationMs: Date.now() - startedAt })
+      child.kill("SIGKILL")
+    }
     const timer = setTimeout(() => {
       log("error", "vite_timeout", { requestId, pid: child.pid, timeoutMs })
       child.kill("SIGKILL")
     }, timeoutMs)
+    signal.addEventListener("abort", cancel, { once: true })
     child.once("error", (error) => {
-      clearTimeout(timer)
-      log("error", "vite_spawn_failed", { requestId, error: String(error) })
-      reject(error)
+      finish(() => {
+        log("error", "vite_spawn_failed", { requestId, error: String(error) })
+        reject(error)
+      })
     })
     child.once("exit", (code) => {
-      clearTimeout(timer)
-      const durationMs = Date.now() - startedAt
-      const buildOutput = sanitizeDiagnostic(output, [directory, canonicalDirectory])
-      if (code === 0) {
-        log("info", "vite_completed", { requestId, pid: child.pid, code, durationMs, output: buildOutput })
-        resolve()
-      } else {
-        log("error", "vite_failed", { requestId, pid: child.pid, code, durationMs, output: buildOutput })
-        reject(new Error(buildOutput || `vite exited with ${code}`))
-      }
+      finish(() => {
+        const durationMs = Date.now() - startedAt
+        const buildOutput = sanitizeDiagnostic(output, [directory, canonicalDirectory])
+        if (signal.aborted) {
+          reject(new Error("request_aborted"))
+        } else if (code === 0) {
+          log("info", "vite_completed", { requestId, pid: child.pid, code, durationMs, output: buildOutput })
+          resolve()
+        } else {
+          log("error", "vite_failed", { requestId, pid: child.pid, code, durationMs, output: buildOutput })
+          reject(new Error(buildOutput || `vite exited with ${code}`))
+        }
+      })
     })
   })
 }
@@ -293,6 +317,15 @@ const server = createServer(async (request, response) => {
     activeBuilds++
     log("info", "build_slot_acquired", { requestId, activeBuilds, maxConcurrentBuilds })
   }
+  const cancellation = compiling ? new AbortController() : undefined
+  const cancelOnDisconnect = () => {
+    if (cancellation && !response.writableEnded && !cancellation.signal.aborted) {
+      cancellation.abort()
+      log("info", "request_cancelled", { requestId, activeBuilds, durationMs: Date.now() - requestStartedAt })
+    }
+  }
+  request.once("aborted", cancelOnDisconnect)
+  response.once("close", cancelOnDisconnect)
   try {
     const body = await readJSON(request)
     if (request.url === "/verify") {
@@ -302,11 +335,16 @@ const server = createServer(async (request, response) => {
       return
     }
     const startedAt = Date.now()
-    const artifactId = await compile(body.snapshot, body.snapshotHash, requestId)
+    const artifactId = await compile(body.snapshot, body.snapshotHash, requestId, cancellation.signal)
     const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt, artifactId } })
     response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
     log("info", "request_completed", { requestId, status: 200, durationMs: Date.now() - requestStartedAt, toolchain })
   } catch (error) {
+    if (cancellation?.signal.aborted) {
+      log("info", "compile_cancelled", { requestId, durationMs: Date.now() - requestStartedAt })
+      if (!response.destroyed && !response.writableEnded) response.writeHead(499).end()
+      return
+    }
     const diagnostic = sanitizeDiagnostic(error)
     const verifying = request.url === "/verify"
     const errorCode = verifying ? "artifact_unavailable" : "compile_failed"
@@ -314,6 +352,8 @@ const server = createServer(async (request, response) => {
     const payload = JSON.stringify({ error: errorCode, diagnostic })
     response.writeHead(422, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
   } finally {
+    request.removeListener("aborted", cancelOnDisconnect)
+    response.removeListener("close", cancelOnDisconnect)
     if (compiling) {
       activeBuilds--
       log("info", "build_slot_released", { requestId, activeBuilds, maxConcurrentBuilds })
