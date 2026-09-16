@@ -143,6 +143,18 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	if err != nil || restored.Payload.Project.Title != "其他设备修改" {
 		t.Fatalf("restore: document=%+v err=%v", restored, err)
 	}
+	tamperedVersion := payload.Versions[1]
+	tamperedVersion.Snapshot.Title = "Changed after release"
+	tamperedJSON, _ := json.Marshal(tamperedVersion.Snapshot)
+	if _, err = database.Exec(`UPDATE immutable_versions SET snapshot_json=? WHERE id=?`, string(tamperedJSON), tamperedVersion.ID); err != nil {
+		t.Fatal(err)
+	}
+	tamperedVersions := append([]catalog.DocumentVersion(nil), payload.Versions...)
+	tamperedVersions[1] = tamperedVersion
+	matched, err := NewCatalogRepository(database).VersionsMatchForMember(ctx, owner.User.ID, workspaceID, projectID, tamperedVersions, payload.Project.ActiveVersionID)
+	if err != nil || matched {
+		t.Fatalf("tampered immutable version trusted: matched=%v err=%v", matched, err)
+	}
 	_, err = catalogService.GetDocument(ctx, other.Session.Token, workspaceID, projectID)
 	assertCatalogCode(t, err, "workspace_forbidden")
 	if err = catalogService.ResolveConflict(ctx, owner.Session.Token, workspaceID, projectID, "local"); err != nil {

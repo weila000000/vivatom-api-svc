@@ -2,9 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 
 	"vivatom-api-svc/internal/domain"
@@ -86,12 +84,10 @@ func (r *UsageRepository) RecoverInterrupted(ctx context.Context, completedAt st
 }
 
 func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accountID, projectID, usageID, prompt string, snapshot domain.ProjectSnapshot, createdAt string) (string, string, error) {
-	payload, err := json.Marshal(snapshot)
+	snapshotHash, payload, err := domain.HashSnapshot(snapshot)
 	if err != nil {
 		return "", "", err
 	}
-	sum := sha256.Sum256(payload)
-	snapshotHash := hex.EncodeToString(sum[:])
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", "", err
@@ -140,6 +136,9 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 	var snapshot domain.ProjectSnapshot
 	if err = json.Unmarshal([]byte(payload), &snapshot); err != nil {
 		return nil, "", err
+	}
+	if calculatedHash, _, hashErr := domain.HashSnapshot(snapshot); hashErr != nil || calculatedHash != snapshotHash {
+		return nil, usage.ResultCandidateInvalid, hashErr
 	}
 	return &snapshot, usage.ResultOK, nil
 }
@@ -290,6 +289,9 @@ func (r *UsageRepository) RestageVersion(ctx context.Context, accountID, workspa
 	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
 		return nil, "", err
 	}
+	if calculatedHash, _, hashErr := domain.HashSnapshot(snapshot); hashErr != nil || calculatedHash != snapshotHash {
+		return nil, usage.ResultCandidateInvalid, hashErr
+	}
 	prompt := "恢复历史版本：" + snapshot.Title
 	var candidateID string
 	if err = tx.QueryRowContext(ctx, `INSERT INTO build_candidates (id,workspace_id,account_id,project_id,usage_id,prompt,snapshot_json,snapshot_hash,status,created_at) VALUES ('candidate_'||lower(hex(randomblob(16))),?,?,?,?,?,?,?, 'pending',?) RETURNING id`, workspaceID, accountID, projectID, "restore:"+versionID, prompt, snapshotJSON, snapshotHash, createdAt).Scan(&candidateID); err != nil {
@@ -334,6 +336,9 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 		if err = json.Unmarshal([]byte(snapshotJSON), &existing.Snapshot); err != nil {
 			return nil, "", err
 		}
+		if calculatedHash, _, hashErr := domain.HashSnapshot(existing.Snapshot); hashErr != nil || calculatedHash != existing.SnapshotHash {
+			return nil, usage.ResultCandidateInvalid, hashErr
+		}
 		existing.Safety = &domain.SafetyVerification{Policy: safetyPolicy, VerifiedAt: safetyVerifiedAt}
 		return &existing, usage.ResultOK, nil
 	}
@@ -342,6 +347,13 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 	}
 	if storedHash != snapshotHash {
 		return nil, usage.ResultCandidateInvalid, nil
+	}
+	var snapshot domain.ProjectSnapshot
+	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
+		return nil, "", err
+	}
+	if calculatedHash, _, hashErr := domain.HashSnapshot(snapshot); hashErr != nil || calculatedHash != storedHash {
+		return nil, usage.ResultCandidateInvalid, hashErr
 	}
 	var activeVersion sql.NullString
 	if err = tx.QueryRowContext(ctx, `SELECT active_version_id FROM workspace_projects WHERE id=? AND workspace_id=?`, projectID, workspaceID).Scan(&activeVersion); err == sql.ErrNoRows {
@@ -408,10 +420,6 @@ func (r *UsageRepository) CommitCandidate(ctx context.Context, accountID, worksp
 		return nil, "", err
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, "", err
-	}
-	var snapshot domain.ProjectSnapshot
-	if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
 		return nil, "", err
 	}
 	return &usage.Version{ID: versionID, ProjectID: projectID, ParentVersionID: parentVersionID, Prompt: prompt, Snapshot: snapshot, CandidateID: candidateID, SnapshotHash: storedHash, SourceAction: sourceAction, ApprovalID: approvalID, CreatedAt: createdAt, Safety: &domain.SafetyVerification{Policy: safetyPolicy, VerifiedAt: safetyVerifiedAt}}, usage.ResultOK, nil

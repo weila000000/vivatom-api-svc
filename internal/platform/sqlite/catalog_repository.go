@@ -44,6 +44,10 @@ func (r *CatalogRepository) VersionsMatchForMember(ctx context.Context, accountI
 		if err = json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
 			return false, err
 		}
+		calculatedHash, _, err := domain.HashSnapshot(snapshot)
+		if err != nil || calculatedHash != snapshotHash {
+			return false, err
+		}
 		candidateParent := ""
 		if candidate.ParentVersionID != nil {
 			candidateParent = *candidate.ParentVersionID

@@ -139,6 +139,15 @@ func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
 	if err = database.QueryRow(`SELECT count(*) FROM candidate_compile_leases WHERE candidate_id=?`, firstID).Scan(&leases); err != nil || leases != 0 {
 		t.Fatalf("superseded candidate leases=%d err=%v", leases, err)
 	}
+	tampered := snapshot
+	tampered.Title = "Changed after verification"
+	tamperedJSON, _ := json.Marshal(tampered)
+	if _, err = database.Exec(`UPDATE build_candidates SET snapshot_json=? WHERE id=?`, string(tamperedJSON), secondID); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, result, loadErr := repository.LoadCandidate(ctx, owner.User.ID, workspaceID, "project-1", secondID, firstHash, "second"); loadErr != nil || result != usage.ResultCandidateInvalid || loaded != nil {
+		t.Fatalf("tampered candidate loaded: snapshot=%+v result=%q err=%v", loaded, result, loadErr)
+	}
 }
 
 type acceptingCompiler struct{ calls int }
