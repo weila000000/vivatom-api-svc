@@ -14,9 +14,28 @@ type UsageService interface {
 	Summary(context.Context, string, string) (usage.Summary, error)
 	Approve(context.Context, string, string, string, string) error
 	CommitCandidate(context.Context, string, string, string, string, string, string, string) (usage.Version, error)
+	PendingCandidate(context.Context, string, string, string) (usage.Candidate, error)
 	RestageVersion(context.Context, string, string, string, string) (usage.Candidate, error)
 }
 type usageHandler struct{ service UsageService }
+
+func (h usageHandler) pendingCandidate(c *gin.Context) {
+	token, ok := identityBearerToken(c)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		writeUsageError(c, &usage.Error{Code: "usage_unavailable", Status: 503})
+		return
+	}
+	candidate, err := h.service.PendingCandidate(c.Request.Context(), token, c.Param("workspaceId"), c.Param("projectId"))
+	if err != nil {
+		writeUsageError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"data": candidate})
+}
 
 func (h usageHandler) restageVersion(c *gin.Context) {
 	token, ok := identityBearerToken(c)
@@ -104,7 +123,7 @@ func writeUsageError(c *gin.Context, err error) {
 	if !errors.As(err, &safe) {
 		safe = &usage.Error{Code: "usage_unavailable", Status: 503}
 	}
-	messages := map[string]string{"unauthorized": "登录已失效，请重新登录", "workspace_forbidden": "无权访问该工作区", "approval_invalid": "审批凭证无效或已使用", "candidate_invalid": "候选源码凭证无效或已提交", "candidate_unsafe": "候选源码不符合当前安全策略", "version_conflict": "项目已发布更新，请同步后重新构建", "version_untrusted": "该历史版本没有可信的服务端产物记录", "version_unsafe": "该历史版本不符合当前安全策略", "compile_in_progress": "候选源码正在隔离编译，请稍后重试", "compile_busy": "隔离编译任务已满，请稍后重试", "compile_failed": "候选源码未通过服务端隔离编译", "compiler_unavailable": "隔离编译服务暂时不可用", "artifact_unavailable": "构建产物缺失或完整性校验失败", "invalid_request": "提交版本的请求不符合协议", "usage_unavailable": "用量服务暂时不可用"}
+	messages := map[string]string{"unauthorized": "登录已失效，请重新登录", "workspace_forbidden": "无权访问该工作区", "approval_invalid": "审批凭证无效或已使用", "candidate_invalid": "候选源码凭证无效或已提交", "candidate_not_found": "当前没有等待恢复的候选源码", "candidate_unsafe": "候选源码不符合当前安全策略", "version_conflict": "项目已发布更新，请同步后重新构建", "version_untrusted": "该历史版本没有可信的服务端产物记录", "version_unsafe": "该历史版本不符合当前安全策略", "compile_in_progress": "候选源码正在隔离编译，请稍后重试", "compile_busy": "隔离编译任务已满，请稍后重试", "compile_failed": "候选源码未通过服务端隔离编译", "compiler_unavailable": "隔离编译服务暂时不可用", "artifact_unavailable": "构建产物缺失或完整性校验失败", "invalid_request": "提交版本的请求不符合协议", "usage_unavailable": "用量服务暂时不可用"}
 	message := messages[safe.Code]
 	if safe.Code == "compile_failed" && safe.Message != "" {
 		message += "：" + safe.Message

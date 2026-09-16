@@ -152,6 +152,38 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 	return &snapshot, usage.ResultOK, nil
 }
 
+func (r *UsageRepository) LatestPendingCandidate(ctx context.Context, accountID, workspaceID, projectID string) (*usage.Candidate, usage.Result, error) {
+	var member int
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
+		return nil, "", err
+	}
+	if member == 0 {
+		return nil, usage.ResultForbidden, nil
+	}
+	var candidate usage.Candidate
+	var payload string
+	err := r.db.QueryRowContext(ctx, `SELECT id,snapshot_hash,prompt,snapshot_json FROM build_candidates WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending' ORDER BY created_at DESC,id DESC LIMIT 1`, workspaceID, accountID, projectID).Scan(&candidate.ID, &candidate.SnapshotHash, &candidate.Prompt, &payload)
+	if err == sql.ErrNoRows {
+		return nil, usage.ResultCandidateInvalid, nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	if err = json.Unmarshal([]byte(payload), &candidate.Snapshot); err != nil {
+		return nil, "", err
+	}
+	checked, err := generation.NewGuard().Check(candidate.Snapshot)
+	if err != nil {
+		return nil, usage.ResultSafetyRejected, nil
+	}
+	calculatedHash, _, err := domain.HashSnapshot(checked)
+	if err != nil || calculatedHash != candidate.SnapshotHash {
+		return nil, usage.ResultCandidateInvalid, err
+	}
+	candidate.Snapshot = checked
+	return &candidate, usage.ResultOK, nil
+}
+
 func (r *UsageRepository) FindVerification(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string) (*domain.BuildVerification, usage.Result, error) {
 	var member int
 	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
