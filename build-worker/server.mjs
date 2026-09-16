@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
 import { constants, createReadStream } from "node:fs"
-import { access, mkdtemp, mkdir, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { access, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { dirname, extname, join, relative, resolve, sep } from "node:path"
@@ -19,6 +19,8 @@ const toolchain = "vite@7.3.6+vue@3.5.42"
 const maxConcurrentBuilds = Number(process.env.VIVATOM_BUILDER_CONCURRENCY || 2)
 const workerRoot = dirname(new URL(import.meta.url).pathname)
 const artifactRoot = resolve(process.env.VIVATOM_ARTIFACT_ROOT || join(workerRoot, ".data", "artifacts"))
+const artifactManifestCache = new Map()
+const maxCachedManifests = 256
 let activeBuilds = 0
 
 if (!Number.isInteger(maxConcurrentBuilds) || maxConcurrentBuilds < 1 || maxConcurrentBuilds > 16) {
@@ -68,6 +70,7 @@ async function checkReady() {
 
 async function inspectArtifact(root) {
   const hash = createHash("sha256")
+  const files = new Map()
   let fileCount = 0
   let totalBytes = 0
   let hasIndex = false
@@ -92,18 +95,29 @@ async function inspectArtifact(root) {
       hash.update(`${Buffer.byteLength(artifactPath)}:`)
       hash.update(artifactPath)
       hash.update(`${metadata.size}:`)
+      const fileHash = createHash("sha256")
       let streamedBytes = 0
       for await (const chunk of createReadStream(path)) {
         streamedBytes += chunk.length
         if (streamedBytes > metadata.size) throw new Error("artifact_changed_during_hash")
         hash.update(chunk)
+        fileHash.update(chunk)
       }
       if (streamedBytes !== metadata.size) throw new Error("artifact_changed_during_hash")
+      files.set(artifactPath, { size: metadata.size, hash: fileHash.digest("hex") })
     }
   }
   await visit(root)
   if (!hasIndex) throw new Error("artifact_entry_missing")
-  return { artifactId: hash.digest("hex"), fileCount, totalBytes }
+  return { artifactId: hash.digest("hex"), fileCount, totalBytes, files }
+}
+
+function rememberArtifact(artifact) {
+  artifactManifestCache.delete(artifact.artifactId)
+  artifactManifestCache.set(artifact.artifactId, artifact)
+  while (artifactManifestCache.size > maxCachedManifests) {
+    artifactManifestCache.delete(artifactManifestCache.keys().next().value)
+  }
 }
 
 async function persistArtifact(source, artifact, requestId) {
@@ -112,11 +126,13 @@ async function persistArtifact(source, artifact, requestId) {
   const destination = join(artifactRoot, artifactId)
   try {
     await rename(source, destination)
+    rememberArtifact(artifact)
     log("info", "artifact_persisted", { requestId, artifactId, fileCount, totalBytes })
   } catch (error) {
     if (error?.code !== "EEXIST" && error?.code !== "ENOTEMPTY") throw error
     const existing = await inspectArtifact(destination)
     if (existing.artifactId !== artifactId) throw new Error("artifact_integrity_mismatch")
+    rememberArtifact(existing)
     log("info", "artifact_reused", { requestId, artifactId, fileCount: existing.fileCount, totalBytes: existing.totalBytes })
   }
 }
@@ -127,7 +143,15 @@ async function verifyArtifact(artifactId) {
   if (!(await stat(root)).isDirectory()) throw new Error("artifact_not_found")
   const artifact = await inspectArtifact(root)
   if (artifact.artifactId !== artifactId) throw new Error("artifact_integrity_mismatch")
+  rememberArtifact(artifact)
   return artifact
+}
+
+async function artifactManifest(artifactId) {
+  const cached = artifactManifestCache.get(artifactId)
+  if (!cached) return verifyArtifact(artifactId)
+  rememberArtifact(cached)
+  return cached
 }
 
 async function compile(snapshot, snapshotHash, requestId, signal) {
@@ -192,6 +216,7 @@ async function serveArtifact(response, pathname) {
   }
   const root = join(artifactRoot, artifactId)
   let target = join(root, requested || "index.html")
+  let artifactPath = requested || "index.html"
   let servingIndex = !requested
   try {
     if (!(await stat(target)).isFile()) throw new Error("not_file")
@@ -201,6 +226,7 @@ async function serveArtifact(response, pathname) {
       return true
     }
     target = join(root, "index.html")
+    artifactPath = "index.html"
     servingIndex = true
     try {
       if (!(await stat(target)).isFile()) throw new Error("not_file")
@@ -209,14 +235,22 @@ async function serveArtifact(response, pathname) {
       return true
     }
   }
+  const manifest = await artifactManifest(artifactId)
+  const expected = manifest.files.get(artifactPath)
+  if (!expected) throw new Error("artifact_file_untrusted")
+  const content = await readFile(target)
+  if (content.length !== expected.size || createHash("sha256").update(content).digest("hex") !== expected.hash) {
+    throw new Error("artifact_file_integrity_mismatch")
+  }
   response.writeHead(200, {
     "Cache-Control": servingIndex ? "no-cache" : "public, max-age=31536000, immutable",
     "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors *",
     "Content-Type": contentTypes[extname(target)] || "application/octet-stream",
+    "Content-Length": content.length,
     "Cross-Origin-Resource-Policy": "cross-origin",
     "X-Content-Type-Options": "nosniff",
   })
-  createReadStream(target).pipe(response)
+  response.end(content)
   return true
 }
 
@@ -379,9 +413,17 @@ const previewServer = createServer(async (request, response) => {
     }
     return
   }
-  if (request.method === "GET" && await serveArtifact(response, pathname)) {
-    log("info", "preview_served", { requestId, path: pathname, durationMs: Date.now() - requestStartedAt })
-    return
+  if (request.method === "GET") {
+    try {
+      if (await serveArtifact(response, pathname)) {
+        log("info", "preview_served", { requestId, path: pathname, durationMs: Date.now() - requestStartedAt })
+        return
+      }
+    } catch (error) {
+      response.writeHead(503, { "Cache-Control": "no-store" }).end()
+      log("error", "preview_integrity_failed", { requestId, path: pathname, status: 503, durationMs: Date.now() - requestStartedAt, error: sanitizeDiagnostic(error) })
+      return
+    }
   }
   response.writeHead(404).end()
   log("info", "preview_request_completed", { requestId, status: 404, durationMs: Date.now() - requestStartedAt })
