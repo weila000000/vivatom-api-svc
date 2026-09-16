@@ -5,5 +5,5 @@ RUN npm ci --omit=dev
 COPY server.mjs runner.mjs import-policy.mjs ./
 RUN mkdir /artifacts && chown node:node /artifacts
 USER node
-EXPOSE 8090
+EXPOSE 8090 8091
 CMD ["node", "server.mjs"]

@@ -7,13 +7,14 @@ services:
       VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:-vivatom-local-builder}
       VIVATOM_ARTIFACT_ROOT: /artifacts
       VIVATOM_BUILDER_CONCURRENCY: ${VIVATOM_BUILDER_CONCURRENCY:-2}
+      VIVATOM_PREVIEW_PORT: 8091
     read_only: true
     tmpfs:
       - /tmp:size=256m,mode=1777
     volumes:
       - vivatom-artifacts:/artifacts
     ports:
-      - "8090:8090"
+      - "8091:8091"
     mem_limit: 512m
     pids_limit: 128
     cap_drop:

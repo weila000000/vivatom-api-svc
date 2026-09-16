@@ -6,7 +6,8 @@ import { createHash, randomUUID } from "node:crypto"
 import { dirname, extname, join, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
 
-const port = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
+const controlPort = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
+const previewPort = Number(process.env.VIVATOM_PREVIEW_PORT || 8091)
 const token = process.env.VIVATOM_BUILDER_TOKEN || "vivatom-local-builder"
 const maxBodyBytes = 2.25 * 1024 * 1024
 const maxOutputBytes = 64 * 1024
@@ -22,6 +23,9 @@ let activeBuilds = 0
 
 if (!Number.isInteger(maxConcurrentBuilds) || maxConcurrentBuilds < 1 || maxConcurrentBuilds > 16) {
   throw new Error("VIVATOM_BUILDER_CONCURRENCY must be an integer between 1 and 16")
+}
+if (![controlPort, previewPort].every((value) => Number.isInteger(value) && value > 0 && value < 65536) || controlPort === previewPort) {
+  throw new Error("builder and preview ports must be distinct valid ports")
 }
 
 function log(level, event, fields = {}) {
@@ -174,7 +178,7 @@ const contentTypes = {
   ".webp": "image/webp",
 }
 
-async function serveArtifact(request, response, pathname) {
+async function serveArtifact(response, pathname) {
   const match = pathname.match(/^\/preview\/([a-f0-9]{64})(?:\/(.*))?$/)
   if (!match) return false
   const [, artifactId, requested = ""] = match
@@ -274,7 +278,7 @@ function runVite(directory, canonicalDirectory, entryFile, requestId, signal) {
   })
 }
 
-const server = createServer(async (request, response) => {
+const controlServer = createServer(async (request, response) => {
   const requestId = randomUUID().replaceAll("-", "")
   const requestStartedAt = Date.now()
   const remoteAddress = request.socket.remoteAddress
@@ -289,10 +293,6 @@ const server = createServer(async (request, response) => {
       response.writeHead(503).end()
       log("error", "readiness_failed", { requestId, status: 503, durationMs: Date.now() - requestStartedAt, error: sanitizeDiagnostic(error) })
     }
-    return
-  }
-  if (request.method === "GET" && await serveArtifact(request, response, pathname)) {
-    log("info", "preview_served", { requestId, path: pathname, durationMs: Date.now() - requestStartedAt })
     return
   }
   if (request.method !== "POST" || (request.url !== "/compile" && request.url !== "/verify")) {
@@ -359,28 +359,59 @@ const server = createServer(async (request, response) => {
       log("info", "build_slot_released", { requestId, activeBuilds, maxConcurrentBuilds })
     }
   }
-}).listen(port, "0.0.0.0", () => {
-  log("info", "builder_started", { port, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, maxArtifactFiles, maxArtifactFileBytes, maxArtifactBytes, timeoutMs, maxConcurrentBuilds })
+}).listen(controlPort, "0.0.0.0", () => {
+  log("info", "builder_started", { controlPort, previewPort, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, maxArtifactFiles, maxArtifactFileBytes, maxArtifactBytes, timeoutMs, maxConcurrentBuilds })
 })
 
-server.on("clientError", (error, socket) => {
-  log("error", "client_error", { error: String(error) })
-  socket.end("HTTP/1.1 400 Bad Request\r\n\r\n")
+const previewServer = createServer(async (request, response) => {
+  const requestId = randomUUID().replaceAll("-", "")
+  const requestStartedAt = Date.now()
+  const pathname = new URL(request.url || "/", "http://preview.local").pathname
+  log("info", "preview_request_started", { requestId, method: request.method, path: request.url, remoteAddress: request.socket.remoteAddress })
+  if ((request.method === "GET" || request.method === "HEAD") && request.url === "/health") {
+    try {
+      await access(artifactRoot, constants.R_OK)
+      response.writeHead(204).end()
+      log("info", "preview_readiness_passed", { requestId, status: 204, durationMs: Date.now() - requestStartedAt })
+    } catch (error) {
+      response.writeHead(503).end()
+      log("error", "preview_readiness_failed", { requestId, status: 503, durationMs: Date.now() - requestStartedAt, error: sanitizeDiagnostic(error) })
+    }
+    return
+  }
+  if (request.method === "GET" && await serveArtifact(response, pathname)) {
+    log("info", "preview_served", { requestId, path: pathname, durationMs: Date.now() - requestStartedAt })
+    return
+  }
+  response.writeHead(404).end()
+  log("info", "preview_request_completed", { requestId, status: 404, durationMs: Date.now() - requestStartedAt })
+}).listen(previewPort, "0.0.0.0", () => {
+  log("info", "preview_started", { previewPort, artifactRoot })
 })
+
+for (const [name, httpServer] of [["control", controlServer], ["preview", previewServer]]) {
+  httpServer.on("clientError", (error, socket) => {
+    log("error", "client_error", { server: name, error: String(error) })
+    socket.end("HTTP/1.1 400 Bad Request\r\n\r\n")
+  })
+}
+
+function closeServer(server) {
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+}
 
 let shuttingDown = false
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => {
+  process.on(signal, async () => {
     if (shuttingDown) return
     shuttingDown = true
     log("info", "shutdown_started", { signal })
-    server.close((error) => {
-      if (error) {
-        log("error", "shutdown_failed", { signal, error: String(error) })
-        process.exitCode = 1
-      } else {
-        log("info", "shutdown_completed", { signal })
-      }
-    })
+    try {
+      await Promise.all([closeServer(controlServer), closeServer(previewServer)])
+      log("info", "shutdown_completed", { signal })
+    } catch (error) {
+      log("error", "shutdown_failed", { signal, error: String(error) })
+      process.exitCode = 1
+    }
   })
 }

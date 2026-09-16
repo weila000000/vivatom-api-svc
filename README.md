@@ -37,6 +37,8 @@ Build Worker 向标准输出写入 JSON 日志。启动、请求、Snapshot 元�
 
 Compose 使用 Node 自身执行 Worker 健康探针，不依赖基础镜像中的额外命令。Worker 的停止宽限期为 60 秒，覆盖 45 秒构建超时和工作区清理；API 的停止宽限期为 15 秒，覆盖默认 10 秒优雅停机窗口。
 
+Worker 将控制面和预览面分离：8090 仅供 API 在内部网络调用编译、验证与 readiness，8091 仅公开静态预览。前端通过 `VITE_PREVIEW_BASE_URL` 指向 `http://localhost:8091/preview` 或独立预览域名，公开域名不应反向代理 8090。
+
 ## Verification
 
 ```bash
