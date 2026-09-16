@@ -35,6 +35,8 @@ Build Worker 向标准输出写入 JSON 日志。启动、请求、Snapshot 元�
 
 `GET /api/health/live` 只表示 API 进程仍在运行；`GET /api/health/ready` 会同时检查 SQLite 和 Build Worker。Worker 会继续检查 Vite 工具链和 Artifact Store 读写权限；未启动、工具链缺失、产物卷不可写或健康接口超时时，readiness 返回 `503`，前端会据此提示服务尚未就绪。
 
+Compose 使用 Node 自身执行 Worker 健康探针，不依赖基础镜像中的额外命令。Worker 的停止宽限期为 60 秒，覆盖 45 秒构建超时和工作区清理；API 的停止宽限期为 15 秒，覆盖默认 10 秒优雅停机窗口。
+
 ## Verification
 
 ```bash

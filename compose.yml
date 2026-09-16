@@ -2,6 +2,7 @@ services:
   builder:
     build: ./build-worker
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:-vivatom-local-builder}
       VIVATOM_ARTIFACT_ROOT: /artifacts
@@ -22,7 +23,7 @@ services:
     networks:
       - build
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8090/health"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.status===204?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -31,6 +32,7 @@ services:
   api:
     build: .
     restart: unless-stopped
+    stop_grace_period: 15s
     environment:
       VIVATOM_HTTP_ADDRESS: :8080
       VIVATOM_RUNTIME_DATABASE_PATH: /app/data/vivatom.db
