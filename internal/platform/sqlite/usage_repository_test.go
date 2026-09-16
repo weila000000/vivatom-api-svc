@@ -23,6 +23,16 @@ func (incompleteRunner) Run(context.Context, domain.AgentRequest) (<-chan domain
 	return events, nil
 }
 
+type trailingEventRunner struct{}
+
+func (trailingEventRunner) Run(context.Context, domain.AgentRequest) (<-chan domain.AgentEvent, error) {
+	events := make(chan domain.AgentEvent, 2)
+	events <- domain.AgentEvent{Type: "done"}
+	events <- domain.AgentEvent{Type: "approval.required", Plan: &domain.BuildPlan{}}
+	close(events)
+	return events, nil
+}
+
 func TestUsageServiceFailsAnIncompleteAgentStream(t *testing.T) {
 	database, err := Open(":memory:")
 	if err != nil {
@@ -61,6 +71,46 @@ func TestUsageServiceFailsAnIncompleteAgentStream(t *testing.T) {
 	}
 	if status != "failed" || metadata["status"] != "failed" || metadata["resultCode"] != "agent_stream_incomplete" {
 		t.Fatalf("status=%q metadata=%v", status, metadata)
+	}
+}
+
+func TestUsageServiceRejectsEventsAfterDone(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	identityService := identity.NewService(NewIdentityRepository(database))
+	owner, err := identityService.Register(ctx, identity.Registration{Email: "trailing-stream@example.com", Password: "password-one", Name: "Owner", WorkspaceName: "Streams"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := usage.NewService(identityService, trailingEventRunner{}, NewUsageRepository(database))
+	events, err := service.Run(ctx, owner.Session.Token, owner.Workspaces[0].ID, domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "project-1", Prompt: "build a task board"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received []string
+	for event := range events {
+		received = append(received, event.Type+":"+event.Code)
+	}
+	if strings.Join(received, ",") != "error:agent_stream_invalid,done:" {
+		t.Fatalf("events = %v", received)
+	}
+	var status, resultCode string
+	if err = database.QueryRow(`SELECT status FROM agent_usage ORDER BY created_at DESC LIMIT 1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.QueryRow(`SELECT json_extract(metadata_json,'$.resultCode') FROM audit_events WHERE action='agent.completed' ORDER BY created_at DESC LIMIT 1`).Scan(&resultCode); err != nil {
+		t.Fatal(err)
+	}
+	var plans int
+	if err = database.QueryRow(`SELECT count(*) FROM approved_plans`).Scan(&plans); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || resultCode != "agent_stream_invalid" || plans != 0 {
+		t.Fatalf("status=%q resultCode=%q plans=%d", status, resultCode, plans)
 	}
 }
 
@@ -192,6 +242,10 @@ func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
 	}
 	if _, err = database.Exec(`UPDATE safety_verifications SET policy=? WHERE candidate_id=?`, generation.PolicyVersion, secondID); err != nil {
 		t.Fatal(err)
+	}
+	latest, latestResult, latestErr := repository.LatestPendingCandidate(ctx, owner.User.ID, workspaceID, "project-1")
+	if latestErr != nil || latestResult != usage.ResultOK || latest == nil || latest.ID != secondID || latest.Prompt != "second" || latest.Snapshot.Title != snapshot.Title {
+		t.Fatalf("latest pending candidate: candidate=%+v result=%q err=%v", latest, latestResult, latestErr)
 	}
 	var leases int
 	if err = database.QueryRow(`SELECT count(*) FROM candidate_compile_leases WHERE candidate_id=?`, firstID).Scan(&leases); err != nil || leases != 0 {

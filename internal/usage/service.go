@@ -37,11 +37,36 @@ type Repository interface {
 	ClaimCompilation(context.Context, string, string, string, string, string, string, string) (string, Result, error)
 	RecordVerification(context.Context, string, string, string, string, string, string, domain.BuildVerification, string) (*domain.BuildVerification, Result, error)
 	RecordBuildFailure(context.Context, string, string, string, string, string, string, string, string) (Result, error)
+	LatestPendingCandidate(context.Context, string, string, string) (*Candidate, Result, error)
 	RestageVersion(context.Context, string, string, string, string, string) (*Candidate, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
 	Complete(context.Context, string, string, string, string) error
 	Summary(context.Context, string, string) (Summary, bool, error)
+}
+
+func (s *Service) PendingCandidate(ctx context.Context, token, workspaceID, projectID string) (Candidate, error) {
+	account, err := s.account(ctx, token)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if strings.TrimSpace(projectID) == "" {
+		return Candidate{}, &Error{Code: "invalid_request", Status: http.StatusBadRequest}
+	}
+	candidate, result, err := s.repository.LatestPendingCandidate(ctx, account.ID, workspaceID, projectID)
+	if err != nil {
+		return Candidate{}, unavailable()
+	}
+	if result == ResultForbidden {
+		return Candidate{}, &Error{Code: "workspace_forbidden", Status: http.StatusForbidden}
+	}
+	if result == ResultSafetyRejected {
+		return Candidate{}, &Error{Code: "candidate_unsafe", Status: http.StatusConflict}
+	}
+	if result == ResultCandidateInvalid || candidate == nil {
+		return Candidate{}, &Error{Code: "candidate_not_found", Status: http.StatusNotFound}
+	}
+	return *candidate, nil
 }
 
 type Service struct {
@@ -115,6 +140,7 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		status := "succeeded"
 		resultCode := ""
 		sawDone := false
+		invalidStream := false
 		emit := func(event domain.AgentEvent) bool {
 			select {
 			case output <- event:
@@ -126,6 +152,17 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 			}
 		}
 		for event := range events {
+			if event.Type == "done" {
+				if sawDone {
+					invalidStream = true
+				}
+				sawDone = true
+				continue
+			}
+			if sawDone {
+				invalidStream = true
+				continue
+			}
 			if event.Type == "approval.required" && event.Plan != nil {
 				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, request.Prompt, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
 				if err != nil {
@@ -149,15 +186,19 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 				status = "failed"
 				resultCode = event.Code
 			}
-			if event.Type == "done" {
-				sawDone = true
-			}
 			if !emit(event) {
 				_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
 				return
 			}
 		}
-		if !sawDone {
+		if invalidStream {
+			status = "failed"
+			resultCode = "agent_stream_invalid"
+			if !emit(domain.AgentEvent{Type: "error", Code: resultCode, Message: "Agent 在终止后继续发送事件", Retryable: true}) {
+				_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
+				return
+			}
+		} else if !sawDone {
 			if status != "failed" {
 				status = "failed"
 				resultCode = "agent_stream_incomplete"
@@ -166,10 +207,10 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 					return
 				}
 			}
-			if !emit(domain.AgentEvent{Type: "done"}) {
-				_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
-				return
-			}
+		}
+		if !emit(domain.AgentEvent{Type: "done"}) {
+			_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
+			return
 		}
 		_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
 	}()
