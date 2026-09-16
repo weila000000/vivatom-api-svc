@@ -152,7 +152,7 @@ func (r *UsageRepository) FindVerification(ctx context.Context, accountID, works
 		return nil, usage.ResultForbidden, nil
 	}
 	var verification domain.BuildVerification
-	err := r.db.QueryRowContext(ctx, `SELECT v.toolchain,v.duration_ms,v.verified_at FROM build_verifications v JOIN build_candidates c ON c.id=v.candidate_id AND c.snapshot_hash=v.snapshot_hash WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.snapshot_hash=? AND c.status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&verification.Toolchain, &verification.DurationMS, &verification.VerifiedAt)
+	err := r.db.QueryRowContext(ctx, `SELECT v.toolchain,v.duration_ms,v.artifact_id,v.verified_at FROM build_verifications v JOIN build_candidates c ON c.id=v.candidate_id AND c.snapshot_hash=v.snapshot_hash WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.snapshot_hash=? AND c.status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&verification.Toolchain, &verification.DurationMS, &verification.ArtifactID, &verification.VerifiedAt)
 	if err == sql.ErrNoRows {
 		return nil, usage.ResultOK, nil
 	}
@@ -194,11 +194,11 @@ func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, wor
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,verified_at)
-		SELECT id,?,?,?,? FROM build_candidates
+		INSERT INTO build_verifications (candidate_id,snapshot_hash,toolchain,duration_ms,artifact_id,verified_at)
+		SELECT id,?,?,?,?,? FROM build_candidates
 		WHERE id=? AND workspace_id=? AND account_id=? AND project_id=? AND snapshot_hash=? AND status='pending'
 		AND EXISTS (SELECT 1 FROM candidate_compile_leases WHERE candidate_id=? AND lease_id=?)
-		ON CONFLICT(candidate_id) DO NOTHING`, snapshotHash, verification.Toolchain, verification.DurationMS, verifiedAt, candidateID, workspaceID, accountID, projectID, snapshotHash, candidateID, leaseID)
+		ON CONFLICT(candidate_id) DO NOTHING`, snapshotHash, verification.Toolchain, verification.DurationMS, verification.ArtifactID, verifiedAt, candidateID, workspaceID, accountID, projectID, snapshotHash, candidateID, leaseID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -206,7 +206,7 @@ func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, wor
 		return nil, "", err
 	}
 	var stored domain.BuildVerification
-	err = tx.QueryRowContext(ctx, `SELECT toolchain,duration_ms,verified_at FROM build_verifications WHERE candidate_id=? AND snapshot_hash=?`, candidateID, snapshotHash).Scan(&stored.Toolchain, &stored.DurationMS, &stored.VerifiedAt)
+	err = tx.QueryRowContext(ctx, `SELECT toolchain,duration_ms,artifact_id,verified_at FROM build_verifications WHERE candidate_id=? AND snapshot_hash=?`, candidateID, snapshotHash).Scan(&stored.Toolchain, &stored.DurationMS, &stored.ArtifactID, &stored.VerifiedAt)
 	if err == sql.ErrNoRows {
 		return nil, usage.ResultCandidateInvalid, nil
 	}

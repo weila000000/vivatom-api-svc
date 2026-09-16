@@ -79,6 +79,7 @@ type ProjectSnapshot struct {
 type BuildVerification struct {
 	Toolchain  string `json:"toolchain"`
 	DurationMS int64  `json:"durationMs"`
+	ArtifactID string `json:"artifactId,omitempty"`
 	VerifiedAt string `json:"verifiedAt,omitempty"`
 }
 

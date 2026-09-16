@@ -1,8 +1,9 @@
 import { createServer } from "node:http"
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises"
+import { createReadStream } from "node:fs"
+import { mkdtemp, mkdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { dirname, join } from "node:path"
+import { dirname, extname, join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 
 const port = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
@@ -12,6 +13,7 @@ const maxOutputBytes = 64 * 1024
 const timeoutMs = 45_000
 const toolchain = "vite@7.3.6+vue@3.5.42"
 const workerRoot = dirname(new URL(import.meta.url).pathname)
+const artifactRoot = resolve(process.env.VIVATOM_ARTIFACT_ROOT || join(workerRoot, ".data", "artifacts"))
 
 function log(level, event, fields = {}) {
   const line = JSON.stringify({ time: new Date().toISOString(), level, event, ...fields })
@@ -41,10 +43,11 @@ async function readJSON(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"))
 }
 
-async function compile(snapshot, requestId) {
+async function compile(snapshot, artifactId, requestId) {
   if (!snapshot || !safePath(snapshot.entryFile) || !snapshot.files || snapshot.dependencies?.vue !== "3.5.42") {
     throw new Error("invalid_snapshot")
   }
+  if (!/^[a-f0-9]{64}$/.test(artifactId)) throw new Error("invalid_artifact_id")
   const paths = Object.keys(snapshot.files)
   if (!paths.length || paths.length > 80 || paths.some((path) => !safePath(path)) || !paths.includes(snapshot.entryFile)) {
     throw new Error("invalid_snapshot")
@@ -62,11 +65,69 @@ async function compile(snapshot, requestId) {
       await mkdir(dirname(target), { recursive: true })
       await writeFile(target, source)
     }
-    await runVite(directory, canonicalDirectory, snapshot.entryFile, requestId)
+    await runVite(canonicalDirectory, canonicalDirectory, snapshot.entryFile, requestId)
+    await mkdir(artifactRoot, { recursive: true })
+    const destination = join(artifactRoot, artifactId)
+    await rm(destination, { recursive: true, force: true })
+    await rename(join(directory, "dist"), destination)
+    log("info", "artifact_persisted", { requestId, artifactId })
   } finally {
     await rm(directory, { recursive: true, force: true })
     log("info", "workspace_removed", { requestId })
   }
+}
+
+const contentTypes = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
+  ".webp": "image/webp",
+}
+
+async function serveArtifact(request, response, pathname) {
+  const match = pathname.match(/^\/preview\/([a-f0-9]{64})(?:\/(.*))?$/)
+  if (!match) return false
+  const [, artifactId, requested = ""] = match
+  if (!requested && !pathname.endsWith("/")) {
+    response.writeHead(308, { Location: `${pathname}/` }).end()
+    return true
+  }
+  if (requested.includes("..") || !/^[A-Za-z0-9_./-]*$/.test(requested)) {
+    response.writeHead(404).end()
+    return true
+  }
+  const root = join(artifactRoot, artifactId)
+  let target = join(root, requested || "index.html")
+  let servingIndex = !requested
+  try {
+    if (!(await stat(target)).isFile()) throw new Error("not_file")
+  } catch {
+    if (extname(requested)) {
+      response.writeHead(404).end()
+      return true
+    }
+    target = join(root, "index.html")
+    servingIndex = true
+    try {
+      if (!(await stat(target)).isFile()) throw new Error("not_file")
+    } catch {
+      response.writeHead(404).end()
+      return true
+    }
+  }
+  response.writeHead(200, {
+    "Cache-Control": servingIndex ? "no-cache" : "public, max-age=31536000, immutable",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors *",
+    "Content-Type": contentTypes[extname(target)] || "application/octet-stream",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "X-Content-Type-Options": "nosniff",
+  })
+  createReadStream(target).pipe(response)
+  return true
 }
 
 function runVite(directory, canonicalDirectory, entryFile, requestId) {
@@ -110,10 +171,15 @@ const server = createServer(async (request, response) => {
   const requestId = randomUUID().replaceAll("-", "")
   const requestStartedAt = Date.now()
   const remoteAddress = request.socket.remoteAddress
+  const pathname = new URL(request.url || "/", "http://builder.local").pathname
   log("info", "request_started", { requestId, method: request.method, path: request.url, remoteAddress })
   if (request.method === "GET" && request.url === "/health") {
     response.writeHead(204).end()
     log("info", "request_completed", { requestId, status: 204, durationMs: Date.now() - requestStartedAt })
+    return
+  }
+  if (request.method === "GET" && await serveArtifact(request, response, pathname)) {
+    log("info", "preview_served", { requestId, path: pathname, durationMs: Date.now() - requestStartedAt })
     return
   }
   if (request.method !== "POST" || request.url !== "/compile") {
@@ -129,8 +195,8 @@ const server = createServer(async (request, response) => {
   try {
     const body = await readJSON(request)
     const startedAt = Date.now()
-    await compile(body.snapshot, requestId)
-    const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt } })
+    await compile(body.snapshot, body.artifactId, requestId)
+    const payload = JSON.stringify({ data: { toolchain, durationMs: Date.now() - startedAt, artifactId: body.artifactId } })
     response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
     log("info", "request_completed", { requestId, status: 200, durationMs: Date.now() - requestStartedAt, toolchain })
   } catch (error) {
@@ -140,7 +206,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(422, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }).end(payload)
   }
 }).listen(port, "0.0.0.0", () => {
-  log("info", "builder_started", { port, toolchain, maxBodyBytes, maxOutputBytes, timeoutMs })
+  log("info", "builder_started", { port, toolchain, artifactRoot, maxBodyBytes, maxOutputBytes, timeoutMs })
 })
 
 server.on("clientError", (error, socket) => {

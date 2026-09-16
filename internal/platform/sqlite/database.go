@@ -198,6 +198,7 @@ func migrate(db *sql.DB) error {
 			snapshot_hash TEXT NOT NULL,
 			toolchain TEXT NOT NULL,
 			duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+			artifact_id TEXT NOT NULL DEFAULT '',
 			verified_at TEXT NOT NULL,
 			FOREIGN KEY(candidate_id) REFERENCES build_candidates(id) ON DELETE CASCADE
 		);
@@ -279,7 +280,37 @@ func migrate(db *sql.DB) error {
 	if err = migrateApprovedPlanPrompts(db); err != nil {
 		return err
 	}
-	return migrateBuildCandidatePrompts(db)
+	if err = migrateBuildCandidatePrompts(db); err != nil {
+		return err
+	}
+	return migrateBuildVerificationArtifacts(db)
+}
+
+func migrateBuildVerificationArtifacts(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(build_verifications)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "artifact_id" {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE build_verifications ADD COLUMN artifact_id TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func migrateWorkspaceCreditLimits(db *sql.DB) error {
