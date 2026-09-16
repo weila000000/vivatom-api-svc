@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
-import { createReadStream } from "node:fs"
-import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { constants, createReadStream } from "node:fs"
+import { access, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { dirname, extname, join, relative, resolve, sep } from "node:path"
@@ -47,6 +47,16 @@ async function readJSON(request) {
     chunks.push(chunk)
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+}
+
+async function checkReady() {
+  await mkdir(artifactRoot, { recursive: true })
+  const modules = await stat(join(workerRoot, "node_modules"))
+  if (!modules.isDirectory()) throw new Error("toolchain_not_found")
+  await Promise.all([
+    access(join(workerRoot, "runner.mjs"), constants.R_OK),
+    access(artifactRoot, constants.R_OK | constants.W_OK),
+  ])
 }
 
 async function hashArtifact(root) {
@@ -223,9 +233,15 @@ const server = createServer(async (request, response) => {
   const remoteAddress = request.socket.remoteAddress
   const pathname = new URL(request.url || "/", "http://builder.local").pathname
   log("info", "request_started", { requestId, method: request.method, path: request.url, remoteAddress })
-  if (request.method === "GET" && request.url === "/health") {
-    response.writeHead(204).end()
-    log("info", "request_completed", { requestId, status: 204, durationMs: Date.now() - requestStartedAt })
+  if ((request.method === "GET" || request.method === "HEAD") && request.url === "/health") {
+    try {
+      await checkReady()
+      response.writeHead(204).end()
+      log("info", "readiness_passed", { requestId, status: 204, durationMs: Date.now() - requestStartedAt })
+    } catch (error) {
+      response.writeHead(503).end()
+      log("error", "readiness_failed", { requestId, status: 503, durationMs: Date.now() - requestStartedAt, error: sanitizeDiagnostic(error) })
+    }
     return
   }
   if (request.method === "GET" && await serveArtifact(request, response, pathname)) {
