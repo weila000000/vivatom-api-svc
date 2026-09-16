@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 60s
     environment:
-      VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:-vivatom-local-builder}
+      VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:?VIVATOM_BUILDER_TOKEN must be set}
       VIVATOM_ARTIFACT_ROOT: /artifacts
       VIVATOM_BUILDER_CONCURRENCY: ${VIVATOM_BUILDER_CONCURRENCY:-2}
       VIVATOM_PREVIEW_PORT: 8091
@@ -38,7 +38,7 @@ services:
       VIVATOM_HTTP_ADDRESS: :8080
       VIVATOM_RUNTIME_DATABASE_PATH: /app/data/vivatom.db
       VIVATOM_BUILDER_URL: http://builder:8090
-      VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:-vivatom-local-builder}
+      VIVATOM_BUILDER_TOKEN: ${VIVATOM_BUILDER_TOKEN:?VIVATOM_BUILDER_TOKEN must be set}
       VIVATOM_AI_PROVIDER: ${VIVATOM_AI_PROVIDER:-auto}
       VIVATOM_AI_API_KEY: ${VIVATOM_AI_API_KEY:-}
       VIVATOM_AI_BASE_URL: ${VIVATOM_AI_BASE_URL:-https://vibe.linux008.com/v1}

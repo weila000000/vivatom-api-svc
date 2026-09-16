@@ -9,10 +9,11 @@ import { artifactETag, matchesIfNoneMatch } from "./preview-http.mjs"
 import { previewSecurityHeaders } from "./preview-security.mjs"
 import { hashSnapshot } from "./snapshot-hash.mjs"
 import { verifyToolchain } from "./toolchain.mjs"
+import { builderTokenMatches, requireBuilderToken } from "./auth.mjs"
 
 const controlPort = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
 const previewPort = Number(process.env.VIVATOM_PREVIEW_PORT || 8091)
-const token = process.env.VIVATOM_BUILDER_TOKEN || "vivatom-local-builder"
+const token = requireBuilderToken()
 const maxBodyBytes = 2.25 * 1024 * 1024
 const maxOutputBytes = 64 * 1024
 const maxArtifactFiles = 128
@@ -344,7 +345,7 @@ const controlServer = createServer(async (request, response) => {
     log("info", "request_completed", { requestId, status: 404, durationMs: Date.now() - requestStartedAt })
     return
   }
-  if (request.headers["x-vivatom-builder-token"] !== token) {
+  if (!builderTokenMatches(token, request.headers["x-vivatom-builder-token"])) {
     response.writeHead(401).end()
     log("error", "request_rejected", { requestId, status: 401, reason: "invalid_token", durationMs: Date.now() - requestStartedAt })
     return

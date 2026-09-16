@@ -39,10 +39,13 @@ func FromEnv() (Config, error) {
 		AgentRateLimit:  10,
 		RateLimitWindow: time.Minute,
 		BuilderURL:      value("VIVATOM_BUILDER_URL", "http://localhost:8090"),
-		BuilderToken:    value("VIVATOM_BUILDER_TOKEN", "vivatom-local-builder"),
+		BuilderToken:    strings.TrimSpace(os.Getenv("VIVATOM_BUILDER_TOKEN")),
 		BuilderTimeout:  50 * time.Second,
 	}
 	var err error
+	if len(config.BuilderToken) < 16 {
+		return Config{}, fmt.Errorf("VIVATOM_BUILDER_TOKEN must contain at least 16 characters")
+	}
 	if config.ReadTimeout, err = duration("VIVATOM_HTTP_READ_TIMEOUT", config.ReadTimeout); err != nil {
 		return Config{}, err
 	}
