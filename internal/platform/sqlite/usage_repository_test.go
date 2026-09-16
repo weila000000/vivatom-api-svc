@@ -15,6 +15,55 @@ import (
 	"vivatom-api-svc/internal/usage"
 )
 
+type incompleteRunner struct{}
+
+func (incompleteRunner) Run(context.Context, domain.AgentRequest) (<-chan domain.AgentEvent, error) {
+	events := make(chan domain.AgentEvent)
+	close(events)
+	return events, nil
+}
+
+func TestUsageServiceFailsAnIncompleteAgentStream(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	identityService := identity.NewService(NewIdentityRepository(database))
+	owner, err := identityService.Register(ctx, identity.Registration{Email: "incomplete-stream@example.com", Password: "password-one", Name: "Owner", WorkspaceName: "Streams"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := usage.NewService(identityService, incompleteRunner{}, NewUsageRepository(database))
+	events, err := service.Run(ctx, owner.Session.Token, owner.Workspaces[0].ID, domain.AgentRequest{Action: domain.ActionPlan, ProjectID: "project-1", Prompt: "build a task board"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received []string
+	for event := range events {
+		received = append(received, event.Type+":"+event.Code)
+	}
+	if strings.Join(received, ",") != "error:agent_stream_incomplete,done:" {
+		t.Fatalf("events = %v", received)
+	}
+
+	var status, metadataJSON string
+	if err = database.QueryRow(`SELECT status FROM agent_usage ORDER BY created_at DESC LIMIT 1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.QueryRow(`SELECT metadata_json FROM audit_events WHERE action='agent.completed' ORDER BY created_at DESC LIMIT 1`).Scan(&metadataJSON); err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err = json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || metadata["status"] != "failed" || metadata["resultCode"] != "agent_stream_incomplete" {
+		t.Fatalf("status=%q metadata=%v", status, metadata)
+	}
+}
+
 func TestCompleteUsageAppendsOneTerminalAuditEvent(t *testing.T) {
 	database, err := Open(":memory:")
 	if err != nil {

@@ -114,6 +114,17 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 		defer close(output)
 		status := "succeeded"
 		resultCode := ""
+		sawDone := false
+		emit := func(event domain.AgentEvent) bool {
+			select {
+			case output <- event:
+				return true
+			case <-ctx.Done():
+				status = "cancelled"
+				resultCode = "client_cancelled"
+				return false
+			}
+		}
 		for event := range events {
 			if event.Type == "approval.required" && event.Plan != nil {
 				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, request.Prompt, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
@@ -138,11 +149,25 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 				status = "failed"
 				resultCode = event.Code
 			}
-			select {
-			case output <- event:
-			case <-ctx.Done():
-				status = "cancelled"
-				_ = s.repository.Complete(context.Background(), usageID, status, "client_cancelled", s.now().UTC().Format(time.RFC3339Nano))
+			if event.Type == "done" {
+				sawDone = true
+			}
+			if !emit(event) {
+				_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
+				return
+			}
+		}
+		if !sawDone {
+			if status != "failed" {
+				status = "failed"
+				resultCode = "agent_stream_incomplete"
+				if !emit(domain.AgentEvent{Type: "error", Code: resultCode, Message: "Agent 事件流意外中断", Retryable: true}) {
+					_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
+					return
+				}
+			}
+			if !emit(domain.AgentEvent{Type: "done"}) {
+				_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
 				return
 			}
 		}
