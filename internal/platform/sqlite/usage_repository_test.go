@@ -240,6 +240,9 @@ func TestStoreCandidateRejectsSupersededPendingCandidate(t *testing.T) {
 	if loaded, result, loadErr := repository.LoadCandidate(ctx, owner.User.ID, workspaceID, "project-1", secondID, firstHash, "second"); loadErr != nil || result != usage.ResultSafetyRejected || loaded != nil {
 		t.Fatalf("stale safety policy loaded: snapshot=%+v result=%q err=%v", loaded, result, loadErr)
 	}
+	if latest, result, latestErr := repository.LatestPendingCandidate(ctx, owner.User.ID, workspaceID, "project-1"); latestErr != nil || result != usage.ResultSafetyRejected || latest != nil {
+		t.Fatalf("stale safety policy recovered: candidate=%+v result=%q err=%v", latest, result, latestErr)
+	}
 	if _, err = database.Exec(`UPDATE safety_verifications SET policy=? WHERE candidate_id=?`, generation.PolicyVersion, secondID); err != nil {
 		t.Fatal(err)
 	}

@@ -161,8 +161,8 @@ func (r *UsageRepository) LatestPendingCandidate(ctx context.Context, accountID,
 		return nil, usage.ResultForbidden, nil
 	}
 	var candidate usage.Candidate
-	var payload string
-	err := r.db.QueryRowContext(ctx, `SELECT id,snapshot_hash,prompt,snapshot_json FROM build_candidates WHERE workspace_id=? AND account_id=? AND project_id=? AND status='pending' ORDER BY created_at DESC,id DESC LIMIT 1`, workspaceID, accountID, projectID).Scan(&candidate.ID, &candidate.SnapshotHash, &candidate.Prompt, &payload)
+	var payload, safetyPolicy, safetyHash string
+	err := r.db.QueryRowContext(ctx, `SELECT c.id,c.snapshot_hash,c.prompt,c.snapshot_json,coalesce(s.policy,''),coalesce(s.snapshot_hash,'') FROM build_candidates c LEFT JOIN safety_verifications s ON s.candidate_id=c.id AND s.snapshot_hash=c.snapshot_hash WHERE c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.status='pending' ORDER BY c.created_at DESC,c.id DESC LIMIT 1`, workspaceID, accountID, projectID).Scan(&candidate.ID, &candidate.SnapshotHash, &candidate.Prompt, &payload, &safetyPolicy, &safetyHash)
 	if err == sql.ErrNoRows {
 		return nil, usage.ResultCandidateInvalid, nil
 	}
@@ -171,6 +171,9 @@ func (r *UsageRepository) LatestPendingCandidate(ctx context.Context, accountID,
 	}
 	if err = json.Unmarshal([]byte(payload), &candidate.Snapshot); err != nil {
 		return nil, "", err
+	}
+	if safetyPolicy != generation.PolicyVersion || safetyHash != candidate.SnapshotHash {
+		return nil, usage.ResultSafetyRejected, nil
 	}
 	checked, err := generation.NewGuard().Check(candidate.Snapshot)
 	if err != nil {
