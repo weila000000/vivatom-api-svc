@@ -89,6 +89,7 @@ func migrate(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS workspaces (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
+			credit_limit INTEGER NOT NULL DEFAULT 15 CHECK(credit_limit >= 0),
 			created_at TEXT NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS memberships (
@@ -263,6 +264,9 @@ func migrate(db *sql.DB) error {
 	if err = migrateAgentUsageActions(db); err != nil {
 		return err
 	}
+	if err = migrateWorkspaceCreditLimits(db); err != nil {
+		return err
+	}
 	if err = migrateAgentUsageApprovals(db); err != nil {
 		return err
 	}
@@ -270,6 +274,33 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	return migrateBuildCandidatePrompts(db)
+}
+
+func migrateWorkspaceCreditLimits(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(workspaces)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "credit_limit" {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE workspaces ADD COLUMN credit_limit INTEGER NOT NULL DEFAULT 15 CHECK(credit_limit >= 0)`)
+	return err
 }
 
 func migrateAgentUsageApprovals(db *sql.DB) error {

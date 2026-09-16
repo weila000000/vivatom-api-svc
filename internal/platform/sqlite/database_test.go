@@ -13,6 +13,10 @@ func TestOpenMigratesApprovedPlanPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = legacy.Exec(`
+		CREATE TABLE workspaces (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL
+		);
+		INSERT INTO workspaces (id,name,created_at) VALUES ('workspace','Legacy','2026-01-01T00:00:00Z');
 		CREATE TABLE approved_plans (
 			id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, account_id TEXT NOT NULL,
 			project_id TEXT NOT NULL, plan_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -42,6 +46,10 @@ func TestOpenMigratesApprovedPlanPrompt(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 	var prompt string
+	var creditLimit int
+	if err = database.QueryRow(`SELECT credit_limit FROM workspaces WHERE id='workspace'`).Scan(&creditLimit); err != nil || creditLimit != 15 {
+		t.Fatalf("legacy credit limit = %d, err=%v", creditLimit, err)
+	}
 	if err = database.QueryRow(`SELECT prompt FROM approved_plans WHERE id='legacy-plan'`).Scan(&prompt); err != nil {
 		t.Fatal(err)
 	}

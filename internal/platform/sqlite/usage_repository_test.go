@@ -225,6 +225,13 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	assertUsageCode(t, err, "quota_exhausted")
 	_, err = service.Summary(ctx, other.Session.Token, workspaceID)
 	assertUsageCode(t, err, "workspace_forbidden")
+	if _, err = database.Exec(`UPDATE workspaces SET credit_limit=credit_limit+99999 WHERE id=?`, workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	recharged, err := service.Summary(ctx, owner.Session.Token, workspaceID)
+	if err != nil || recharged.Limit != 100014 || recharged.Used != 13 || recharged.Remaining != 100001 {
+		t.Fatalf("recharged summary=%+v err=%v", recharged, err)
+	}
 	var succeeded int
 	if err = database.QueryRow(`SELECT count(*) FROM agent_usage WHERE workspace_id=? AND status='succeeded'`, workspaceID).Scan(&succeeded); err != nil || succeeded != 4 {
 		t.Fatalf("succeeded=%d err=%v", succeeded, err)

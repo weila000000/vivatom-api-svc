@@ -12,9 +12,17 @@ import (
 	"vivatom-api-svc/internal/usage"
 )
 
-const defaultWorkspaceCreditLimit = 15
-
 type UsageRepository struct{ db *sql.DB }
+
+type creditQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func workspaceCreditUsage(ctx context.Context, queryer creditQueryer, workspaceID string) (int, int, error) {
+	var limit, used int
+	err := queryer.QueryRowContext(ctx, `SELECT w.credit_limit,coalesce(sum(u.credits),0) FROM workspaces w LEFT JOIN agent_usage u ON u.workspace_id=w.id WHERE w.id=? GROUP BY w.id`, workspaceID).Scan(&limit, &used)
+	return limit, used, err
+}
 
 func NewUsageRepository(db *sql.DB) *UsageRepository { return &UsageRepository{db: db} }
 
@@ -340,11 +348,11 @@ func (r *UsageRepository) ReserveApproved(ctx context.Context, accountID, worksp
 	if member == 0 {
 		return "", nil, usage.ResultForbidden, nil
 	}
-	var used int
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(credits),0) FROM agent_usage WHERE workspace_id=?`, workspaceID).Scan(&used); err != nil {
+	limit, used, err := workspaceCreditUsage(ctx, tx, workspaceID)
+	if err != nil {
 		return "", nil, "", err
 	}
-	if used+credits > defaultWorkspaceCreditLimit {
+	if used+credits > limit {
 		return "", nil, usage.ResultExhausted, nil
 	}
 	var payload string
@@ -399,11 +407,11 @@ func (r *UsageRepository) Reserve(ctx context.Context, accountID, workspaceID, p
 	if member == 0 {
 		return "", usage.ResultForbidden, nil
 	}
-	var used int
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(credits),0) FROM agent_usage WHERE workspace_id=?`, workspaceID).Scan(&used); err != nil {
+	limit, used, err := workspaceCreditUsage(ctx, tx, workspaceID)
+	if err != nil {
 		return "", "", err
 	}
-	if used+credits > defaultWorkspaceCreditLimit {
+	if used+credits > limit {
 		return "", usage.ResultExhausted, nil
 	}
 	var id string
@@ -460,13 +468,13 @@ func (r *UsageRepository) Summary(ctx context.Context, accountID, workspaceID st
 	if member == 0 {
 		return usage.Summary{}, false, nil
 	}
-	var used int
-	if err := r.db.QueryRowContext(ctx, `SELECT coalesce(sum(credits),0) FROM agent_usage WHERE workspace_id=?`, workspaceID).Scan(&used); err != nil {
+	limit, used, err := workspaceCreditUsage(ctx, r.db, workspaceID)
+	if err != nil {
 		return usage.Summary{}, false, err
 	}
-	remaining := defaultWorkspaceCreditLimit - used
+	remaining := limit - used
 	if remaining < 0 {
 		remaining = 0
 	}
-	return usage.Summary{WorkspaceID: workspaceID, Limit: defaultWorkspaceCreditLimit, Used: used, Remaining: remaining}, true, nil
+	return usage.Summary{WorkspaceID: workspaceID, Limit: limit, Used: used, Remaining: remaining}, true, nil
 }
