@@ -81,6 +81,7 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 	other, _ := identityService.Register(ctx, identity.Registration{Email: "doc-other@example.com", Password: "password-two", Name: "Other", WorkspaceName: "Other Space"})
 	workspaceID, projectID, versionID := owner.Workspaces[0].ID, "project-doc", "version-doc"
 	activeVersionID := versionID
+	approvalID := "plan-approved"
 	_, err = catalogService.Sync(ctx, owner.Session.Token, workspaceID, catalog.SyncInput{ID: projectID, Title: "云端项目", Status: "planning"})
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +92,7 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := catalog.DocumentPayload{
-		Project:  catalog.DocumentProject{ID: projectID, WorkspaceID: workspaceID, Title: "云端项目", Status: "ready", ActiveVersionID: &activeVersionID, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		Project:  catalog.DocumentProject{ID: projectID, WorkspaceID: workspaceID, Title: "云端项目", Status: "ready", ApprovalID: &approvalID, ActiveVersionID: &activeVersionID, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 		Messages: []catalog.DocumentMessage{{ID: "message-1", ProjectID: projectID, Role: "user", Content: "构建任务板", CreatedAt: "2026-01-01T00:00:00Z"}},
 		Versions: []catalog.DocumentVersion{trustedVersion},
 	}
@@ -140,7 +141,7 @@ func TestProjectDocumentIsHashedIdempotentAndOptimistic(t *testing.T) {
 		t.Fatalf("append version: document=%+v err=%v", third, err)
 	}
 	restored, err := catalogService.GetDocument(ctx, owner.Session.Token, workspaceID, projectID)
-	if err != nil || restored.Payload.Project.Title != "其他设备修改" {
+	if err != nil || restored.Payload.Project.Title != "其他设备修改" || restored.Payload.Project.ApprovalID == nil || *restored.Payload.Project.ApprovalID != approvalID {
 		t.Fatalf("restore: document=%+v err=%v", restored, err)
 	}
 	tamperedVersion := payload.Versions[1]

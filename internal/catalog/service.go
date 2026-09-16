@@ -142,6 +142,9 @@ func validateDocument(workspaceID, projectID string, payload DocumentPayload) er
 	if payload.Project.ID != projectID || payload.Project.WorkspaceID != workspaceID || !validStatus(payload.Project.Status) || strings.TrimSpace(payload.Project.Title) == "" || len([]rune(payload.Project.Title)) > 120 || len(payload.Messages) > 500 || len(payload.Versions) > 100 {
 		return apiError("invalid_document", http.StatusBadRequest)
 	}
+	if payload.Project.ApprovalID != nil && !validID(*payload.Project.ApprovalID) {
+		return apiError("invalid_document", http.StatusBadRequest)
+	}
 	versions := make(map[string]struct{}, len(payload.Versions))
 	guard := generation.NewGuard()
 	for _, version := range payload.Versions {

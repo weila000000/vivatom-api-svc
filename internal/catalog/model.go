@@ -31,6 +31,7 @@ type DocumentProject struct {
 	Title           string            `json:"title"`
 	Status          string            `json:"status"`
 	Plan            *domain.BuildPlan `json:"plan,omitempty"`
+	ApprovalID      *string           `json:"approvalId,omitempty"`
 	ActiveVersionID *string           `json:"activeVersionId,omitempty"`
 	CreatedAt       string            `json:"createdAt"`
 	UpdatedAt       string            `json:"updatedAt"`
