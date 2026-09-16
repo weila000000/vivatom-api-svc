@@ -138,6 +138,25 @@ func (r *UsageRepository) LoadCandidate(ctx context.Context, accountID, workspac
 	return &snapshot, usage.ResultOK, nil
 }
 
+func (r *UsageRepository) FindVerification(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string) (*domain.BuildVerification, usage.Result, error) {
+	var member int
+	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE account_id=? AND workspace_id=?`, accountID, workspaceID).Scan(&member); err != nil {
+		return nil, "", err
+	}
+	if member == 0 {
+		return nil, usage.ResultForbidden, nil
+	}
+	var verification domain.BuildVerification
+	err := r.db.QueryRowContext(ctx, `SELECT v.toolchain,v.duration_ms,v.verified_at FROM build_verifications v JOIN build_candidates c ON c.id=v.candidate_id AND c.snapshot_hash=v.snapshot_hash WHERE c.id=? AND c.workspace_id=? AND c.account_id=? AND c.project_id=? AND c.snapshot_hash=? AND c.status IN ('pending','committed')`, candidateID, workspaceID, accountID, projectID, snapshotHash).Scan(&verification.Toolchain, &verification.DurationMS, &verification.VerifiedAt)
+	if err == sql.ErrNoRows {
+		return nil, usage.ResultOK, nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return &verification, usage.ResultOK, nil
+}
+
 func (r *UsageRepository) RecordVerification(ctx context.Context, accountID, workspaceID, projectID, candidateID, snapshotHash string, verification domain.BuildVerification, verifiedAt string) (*domain.BuildVerification, usage.Result, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

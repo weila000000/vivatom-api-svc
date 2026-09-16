@@ -91,9 +91,10 @@ func TestRecoverInterruptedUsageAppendsTerminalAudit(t *testing.T) {
 	}
 }
 
-type acceptingCompiler struct{}
+type acceptingCompiler struct{ calls int }
 
-func (acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
+func (c *acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {
+	c.calls++
 	return domain.BuildVerification{Toolchain: "test-compiler", DurationMS: 10}, nil
 }
 
@@ -126,7 +127,8 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 	other, _ := identityService.Register(ctx, identity.Registration{Email: "usage-other@example.com", Password: "password-two", Name: "Other", WorkspaceName: "Other"})
 	provider := &ai.FakeProvider{}
 	repository := NewUsageRepository(database)
-	service := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, acceptingCompiler{})
+	compiler := &acceptingCompiler{}
+	service := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, compiler)
 	workspaceID := owner.Workspaces[0].ID
 	if _, err = database.Exec(`INSERT INTO workspace_projects (id,workspace_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?)`, "p1", workspaceID, "Usage project", "building", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
@@ -185,6 +187,9 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			if retryErr != nil || retried.ID != version.ID {
 				t.Fatalf("idempotent commit: version=%+v err=%v", retried, retryErr)
 			}
+			if compiler.calls != 1 {
+				t.Fatalf("idempotent commit compiled %d times", compiler.calls)
+			}
 			restaged, restageErr := service.RestageVersion(ctx, owner.Session.Token, workspaceID, "p1", version.ID)
 			if restageErr != nil || !strings.HasPrefix(restaged.ID, "candidate_") || restaged.ID == candidateID || restaged.SnapshotHash != snapshotHash || restaged.Prompt != "恢复历史版本："+version.Snapshot.Title || restaged.Snapshot.Title != version.Snapshot.Title {
 				t.Fatalf("restage version: candidate=%+v err=%v", restaged, restageErr)
@@ -229,6 +234,18 @@ func TestUsageReservesCreditsAndEnforcesWorkspaceLimit(t *testing.T) {
 			var unavailableAttempts int
 			if err = database.QueryRow(`SELECT count(*) FROM build_attempts WHERE candidate_id=? AND result_code='compiler_unavailable'`, candidateID).Scan(&unavailableAttempts); err != nil || unavailableAttempts != 1 {
 				t.Fatalf("unavailable build attempt: count=%d err=%v", unavailableAttempts, err)
+			}
+			if _, result, verificationErr := repository.RecordVerification(ctx, owner.User.ID, workspaceID, "p1", candidateID, snapshotHash, domain.BuildVerification{Toolchain: "recovered-compiler", DurationMS: 12}, "2026-01-01T00:10:00Z"); verificationErr != nil || result != usage.ResultOK {
+				t.Fatalf("record interrupted verification: result=%q err=%v", result, verificationErr)
+			}
+			resumeService := usage.NewService(identityService, agent.NewOrchestrator(provider, generation.NewGuard()), repository, nil)
+			recoveredVersion, resumeErr := resumeService.CommitCandidate(ctx, owner.Session.Token, workspaceID, "p1", candidateID, snapshotHash, committedVersionID, "build")
+			if resumeErr != nil || recoveredVersion.Build == nil || recoveredVersion.Build.Toolchain != "recovered-compiler" {
+				t.Fatalf("resume verified candidate: version=%+v err=%v", recoveredVersion, resumeErr)
+			}
+			committedVersionID = recoveredVersion.ID
+			if err = database.QueryRow(`SELECT count(*) FROM build_attempts WHERE candidate_id=? AND result_code='compiler_unavailable'`, candidateID).Scan(&unavailableAttempts); err != nil || unavailableAttempts != 1 {
+				t.Fatalf("resume repeated worker call: count=%d err=%v", unavailableAttempts, err)
 			}
 		}
 		if index == 2 {
