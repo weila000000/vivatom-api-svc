@@ -5,6 +5,7 @@ import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { dirname, extname, join, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
+import { artifactETag, matchesIfNoneMatch } from "./preview-http.mjs"
 import { previewSecurityHeaders } from "./preview-security.mjs"
 
 const controlPort = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
@@ -203,7 +204,7 @@ const contentTypes = {
   ".webp": "image/webp",
 }
 
-async function serveArtifact(response, pathname) {
+async function serveArtifact(request, response, pathname) {
   const match = pathname.match(/^\/preview\/([a-f0-9]{64})(?:\/(.*))?$/)
   if (!match) return false
   const [, artifactId, requested = ""] = match
@@ -243,13 +244,19 @@ async function serveArtifact(response, pathname) {
   if (content.length !== expected.size || createHash("sha256").update(content).digest("hex") !== expected.hash) {
     throw new Error("artifact_file_integrity_mismatch")
   }
-  response.writeHead(200, {
+  const etag = artifactETag(expected.hash)
+  const headers = {
     "Cache-Control": servingIndex ? "no-cache" : "public, max-age=31536000, immutable",
     "Content-Type": contentTypes[extname(target)] || "application/octet-stream",
-    "Content-Length": content.length,
+    ETag: etag,
     ...previewSecurityHeaders,
-  })
-  response.end(content)
+  }
+  if (matchesIfNoneMatch(request.headers["if-none-match"], etag)) {
+    response.writeHead(304, headers).end()
+    return true
+  }
+  response.writeHead(200, { ...headers, "Content-Length": content.length })
+  response.end(request.method === "HEAD" ? undefined : content)
   return true
 }
 
@@ -412,9 +419,9 @@ const previewServer = createServer(async (request, response) => {
     }
     return
   }
-  if (request.method === "GET") {
+  if (request.method === "GET" || request.method === "HEAD") {
     try {
-      if (await serveArtifact(response, pathname)) {
+      if (await serveArtifact(request, response, pathname)) {
         log("info", "preview_served", { requestId, path: pathname, durationMs: Date.now() - requestStartedAt })
         return
       }
