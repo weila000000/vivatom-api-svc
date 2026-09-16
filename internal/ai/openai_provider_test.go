@@ -86,6 +86,45 @@ func TestOpenAIProviderRetriesTransientStatus(t *testing.T) {
 	}
 }
 
+func TestStrictCompletionJSONRejectsAmbiguousDocuments(t *testing.T) {
+	var target struct {
+		Name string `json:"name"`
+	}
+	if err := decodeStrictJSON(`{"name":"one"}`, &target); err != nil || target.Name != "one" {
+		t.Fatalf("valid JSON rejected: target=%+v err=%v", target, err)
+	}
+	for _, content := range []string{
+		`{"name":"one"}{"name":"two"}`,
+		`{"name":"one","name":"two"}`,
+		`[{"name":"one"}]`,
+		`{"name":"one","unknown":true}`,
+	} {
+		if err := decodeStrictJSON(content, &target); err == nil {
+			t.Fatalf("ambiguous JSON accepted: %s", content)
+		}
+	}
+}
+
+func TestCompletionStreamRequiresDoneAndBoundsOutput(t *testing.T) {
+	withoutDone := `data: {"choices":[{"delta":{"content":"{}"}}]}` + "\n\n"
+	if _, err := readCompletionStream(strings.NewReader(withoutDone)); err == nil {
+		t.Fatal("stream without done marker was accepted")
+	}
+	chunk := strings.Repeat("x", 1024*1024)
+	var stream strings.Builder
+	for range 5 {
+		encoded, err := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": chunk}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&stream, "data: %s\n\n", encoded)
+	}
+	stream.WriteString("data: [DONE]\n\n")
+	if _, err := readCompletionStream(strings.NewReader(stream.String())); err == nil {
+		t.Fatal("oversized completion was accepted")
+	}
+}
+
 func TestProviderErrorsAreSafeAndClassified(t *testing.T) {
 	code, message, retryable := NormalizeError(invalidOutput(errors.New("secret upstream body")))
 	if code != "provider_output_invalid" || !retryable || strings.Contains(message, "secret") {

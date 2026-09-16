@@ -20,6 +20,12 @@ type OpenAIProvider struct {
 	client *http.Client
 }
 
+const (
+	maxCompletionBytes  = 4 * 1024 * 1024
+	maxStreamEventBytes = 8 * 1024 * 1024
+	maxStreamBytes      = 32 * 1024 * 1024
+)
+
 func NewOpenAIProvider(config Config) *OpenAIProvider {
 	if config.AnalystModel == "" {
 		config.AnalystModel = config.Model
@@ -131,9 +137,7 @@ func (p *OpenAIProvider) completeJSON(ctx context.Context, system, user string, 
 	for attempt := 0; attempt <= p.config.MaxRetries; attempt++ {
 		content, retry, err := p.request(ctx, body)
 		if err == nil {
-			decoder := json.NewDecoder(strings.NewReader(content))
-			decoder.DisallowUnknownFields()
-			if err := decoder.Decode(target); err != nil {
+			if err := decodeStrictJSON(content, target); err != nil {
 				return invalidOutput(err)
 			}
 			return nil
@@ -188,9 +192,11 @@ func (p *OpenAIProvider) request(ctx context.Context, body []byte) (string, bool
 }
 
 func readCompletionStream(reader io.Reader) (string, error) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
+	limited := &io.LimitedReader{R: reader, N: maxStreamBytes + 1}
+	scanner := bufio.NewScanner(limited)
+	scanner.Buffer(make([]byte, 64*1024), maxStreamEventBytes)
 	var content strings.Builder
+	done := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
@@ -198,6 +204,7 @@ func readCompletionStream(reader io.Reader) (string, error) {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			done = true
 			break
 		}
 		var chunk struct {
@@ -210,17 +217,121 @@ func readCompletionStream(reader io.Reader) (string, error) {
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return "", invalidOutput(err)
 		}
+		if len(chunk.Choices) > 1 {
+			return "", invalidOutput(errors.New("multiple completion choices"))
+		}
 		for _, choice := range chunk.Choices {
+			if content.Len()+len(choice.Delta.Content) > maxCompletionBytes {
+				return "", invalidOutput(errors.New("completion too large"))
+			}
 			content.WriteString(choice.Delta.Content)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return "", &ProviderError{Code: "provider_error", Retryable: true, Cause: err}
 	}
+	if limited.N == 0 {
+		return "", invalidOutput(errors.New("completion stream too large"))
+	}
+	if !done {
+		return "", &ProviderError{Code: "provider_error", Retryable: true, Cause: errors.New("completion stream ended before done")}
+	}
 	if strings.TrimSpace(content.String()) == "" {
 		return "", invalidOutput(errors.New("empty completion"))
 	}
 	return content.String(), nil
+}
+
+func decodeStrictJSON(content string, target any) error {
+	validator := json.NewDecoder(strings.NewReader(content))
+	first, err := validator.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := first.(json.Delim); !ok || delimiter != '{' {
+		return errors.New("completion must be one JSON object")
+	}
+	if err = validateJSONObject(validator); err != nil {
+		return err
+	}
+	if _, err = validator.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return err
+	}
+	decoder := json.NewDecoder(strings.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(target); err != nil {
+		return err
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateJSONObject(decoder *json.Decoder) error {
+	keys := map[string]struct{}{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return errors.New("invalid JSON object key")
+		}
+		if _, duplicate := keys[key]; duplicate {
+			return fmt.Errorf("duplicate JSON key %q", key)
+		}
+		keys[key] = struct{}{}
+		if err = validateJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := closing.(json.Delim); !ok || delimiter != '}' {
+		return errors.New("invalid JSON object")
+	}
+	return nil
+}
+
+func validateJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, nested := token.(json.Delim)
+	if !nested {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		return validateJSONObject(decoder)
+	case '[':
+		for decoder.More() {
+			if err = validateJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, closeErr := decoder.Token()
+		if closeErr != nil {
+			return closeErr
+		}
+		if closing != json.Delim(']') {
+			return errors.New("invalid JSON array")
+		}
+		return nil
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
 }
 
 func invalidOutput(err error) error {
