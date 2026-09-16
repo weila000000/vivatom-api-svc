@@ -7,6 +7,7 @@ import { dirname, extname, join, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
 import { artifactETag, matchesIfNoneMatch } from "./preview-http.mjs"
 import { previewSecurityHeaders } from "./preview-security.mjs"
+import { hashSnapshot } from "./snapshot-hash.mjs"
 
 const controlPort = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
 const previewPort = Number(process.env.VIVATOM_PREVIEW_PORT || 8091)
@@ -163,6 +164,7 @@ async function compile(snapshot, snapshotHash, requestId, signal) {
     throw new Error("invalid_snapshot")
   }
   if (!/^[a-f0-9]{64}$/.test(snapshotHash)) throw new Error("invalid_snapshot_hash")
+  if (hashSnapshot(snapshot) !== snapshotHash) throw new Error("snapshot_hash_mismatch")
   const paths = Object.keys(snapshot.files)
   if (!paths.length || paths.length > 80 || paths.some((path) => !safePath(path)) || !paths.includes(snapshot.entryFile)) {
     throw new Error("invalid_snapshot")
