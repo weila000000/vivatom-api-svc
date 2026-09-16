@@ -5,6 +5,7 @@ import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { dirname, extname, join, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
+import { previewSecurityHeaders } from "./preview-security.mjs"
 
 const controlPort = Number(process.env.VIVATOM_BUILDER_PORT || 8090)
 const previewPort = Number(process.env.VIVATOM_PREVIEW_PORT || 8091)
@@ -244,11 +245,9 @@ async function serveArtifact(response, pathname) {
   }
   response.writeHead(200, {
     "Cache-Control": servingIndex ? "no-cache" : "public, max-age=31536000, immutable",
-    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors *",
     "Content-Type": contentTypes[extname(target)] || "application/octet-stream",
     "Content-Length": content.length,
-    "Cross-Origin-Resource-Policy": "cross-origin",
-    "X-Content-Type-Options": "nosniff",
+    ...previewSecurityHeaders,
   })
   response.end(content)
   return true
