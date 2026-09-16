@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -13,6 +14,44 @@ import (
 	"vivatom-api-svc/internal/identity"
 	"vivatom-api-svc/internal/usage"
 )
+
+func TestCompleteUsageAppendsOneTerminalAuditEvent(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	identityService := identity.NewService(NewIdentityRepository(database))
+	owner, err := identityService.Register(ctx, identity.Registration{Email: "audit-usage@example.com", Password: "password-one", Name: "Owner", WorkspaceName: "Audit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := NewUsageRepository(database)
+	workspaceID := owner.Workspaces[0].ID
+	usageID, result, err := repository.Reserve(ctx, owner.User.ID, workspaceID, "project-1", "plan", 1, "2026-01-01T00:00:00Z")
+	if err != nil || result != usage.ResultOK {
+		t.Fatalf("reserve: id=%q result=%q err=%v", usageID, result, err)
+	}
+	if err = repository.Complete(ctx, usageID, "failed", "provider_timeout", "2026-01-01T00:01:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err = repository.Complete(ctx, usageID, "failed", "different_code", "2026-01-01T00:02:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	var metadataJSON string
+	var count int
+	if err = database.QueryRow(`SELECT count(*),max(metadata_json) FROM audit_events WHERE action='agent.completed' AND target_id='project-1'`).Scan(&count, &metadataJSON); err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err = json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || metadata["status"] != "failed" || metadata["resultCode"] != "provider_timeout" || metadata["usageId"] != usageID {
+		t.Fatalf("count=%d metadata=%v", count, metadata)
+	}
+}
 
 type acceptingCompiler struct{}
 

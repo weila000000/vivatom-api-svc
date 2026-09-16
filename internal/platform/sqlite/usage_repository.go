@@ -383,9 +383,37 @@ func (r *UsageRepository) Reserve(ctx context.Context, accountID, workspaceID, p
 	return id, usage.ResultOK, nil
 }
 
-func (r *UsageRepository) Complete(ctx context.Context, id, status, completedAt string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE agent_usage SET status=?,completed_at=? WHERE id=? AND status='running'`, status, completedAt, id)
-	return err
+func (r *UsageRepository) Complete(ctx context.Context, id, status, resultCode, completedAt string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var workspaceID, accountID, projectID, action string
+	if err = tx.QueryRowContext(ctx, `SELECT workspace_id,account_id,project_id,action FROM agent_usage WHERE id=? AND status='running'`, id).Scan(&workspaceID, &accountID, &projectID, &action); err == sql.ErrNoRows {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE agent_usage SET status=?,completed_at=? WHERE id=? AND status='running'`, status, completedAt, id)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return nil
+	}
+	metadata := map[string]any{"usageId": id, "action": action, "status": status}
+	if resultCode != "" {
+		metadata["resultCode"] = resultCode
+	}
+	if err = appendAudit(ctx, tx, workspaceID, accountID, "agent.completed", "project", projectID, completedAt, metadata); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *UsageRepository) Summary(ctx context.Context, accountID, workspaceID string) (usage.Summary, bool, error) {

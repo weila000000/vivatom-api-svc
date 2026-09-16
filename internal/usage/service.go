@@ -33,7 +33,7 @@ type Repository interface {
 	RestageVersion(context.Context, string, string, string, string, string) (*Candidate, Result, error)
 	ApprovePlan(context.Context, string, string, string, string, string) (Result, error)
 	ReserveApproved(context.Context, string, string, string, string, string, int, string) (string, *domain.BuildPlan, Result, error)
-	Complete(context.Context, string, string, string) error
+	Complete(context.Context, string, string, string, string) error
 	Summary(context.Context, string, string) (Summary, bool, error)
 }
 
@@ -92,13 +92,14 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 	}
 	events, err := s.runner.Run(ctx, request)
 	if err != nil {
-		_ = s.repository.Complete(context.Background(), usageID, "failed", s.now().UTC().Format(time.RFC3339Nano))
+		_ = s.repository.Complete(context.Background(), usageID, "failed", "runner_unavailable", s.now().UTC().Format(time.RFC3339Nano))
 		return nil, err
 	}
 	output := make(chan domain.AgentEvent)
 	go func() {
 		defer close(output)
 		status := "succeeded"
+		resultCode := ""
 		for event := range events {
 			if event.Type == "approval.required" && event.Plan != nil {
 				approvalID, err := s.repository.StorePlan(context.Background(), workspaceID, account.ID, request.ProjectID, request.Prompt, *event.Plan, s.now().UTC().Format(time.RFC3339Nano))
@@ -121,16 +122,17 @@ func (s *Service) Run(ctx context.Context, token, workspaceID string, request do
 			}
 			if event.Type == "error" {
 				status = "failed"
+				resultCode = event.Code
 			}
 			select {
 			case output <- event:
 			case <-ctx.Done():
 				status = "cancelled"
-				_ = s.repository.Complete(context.Background(), usageID, status, s.now().UTC().Format(time.RFC3339Nano))
+				_ = s.repository.Complete(context.Background(), usageID, status, "client_cancelled", s.now().UTC().Format(time.RFC3339Nano))
 				return
 			}
 		}
-		_ = s.repository.Complete(context.Background(), usageID, status, s.now().UTC().Format(time.RFC3339Nano))
+		_ = s.repository.Complete(context.Background(), usageID, status, resultCode, s.now().UTC().Format(time.RFC3339Nano))
 	}()
 	return output, nil
 }
