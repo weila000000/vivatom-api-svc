@@ -53,6 +53,44 @@ func TestCompleteUsageAppendsOneTerminalAuditEvent(t *testing.T) {
 	}
 }
 
+func TestRecoverInterruptedUsageAppendsTerminalAudit(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	identityService := identity.NewService(NewIdentityRepository(database))
+	owner, err := identityService.Register(ctx, identity.Registration{Email: "recovery@example.com", Password: "password-one", Name: "Owner", WorkspaceName: "Recovery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := NewUsageRepository(database)
+	workspaceID := owner.Workspaces[0].ID
+	usageID, result, err := repository.Reserve(ctx, owner.User.ID, workspaceID, "project-1", "plan", 1, "2026-01-01T00:00:00Z")
+	if err != nil || result != usage.ResultOK {
+		t.Fatalf("reserve: id=%q result=%q err=%v", usageID, result, err)
+	}
+
+	recovered, err := repository.RecoverInterrupted(ctx, "2026-01-01T00:01:00Z")
+	if err != nil || recovered != 1 {
+		t.Fatalf("recover: count=%d err=%v", recovered, err)
+	}
+	if recovered, err = repository.RecoverInterrupted(ctx, "2026-01-01T00:02:00Z"); err != nil || recovered != 0 {
+		t.Fatalf("idempotent recover: count=%d err=%v", recovered, err)
+	}
+	var status, completedAt, resultCode string
+	if err = database.QueryRow(`SELECT status,completed_at FROM agent_usage WHERE id=?`, usageID).Scan(&status, &completedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.QueryRow(`SELECT json_extract(metadata_json,'$.resultCode') FROM audit_events WHERE action='agent.completed' AND json_extract(metadata_json,'$.usageId')=?`, usageID).Scan(&resultCode); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || completedAt != "2026-01-01T00:01:00Z" || resultCode != "server_restarted" {
+		t.Fatalf("status=%q completedAt=%q resultCode=%q", status, completedAt, resultCode)
+	}
+}
+
 type acceptingCompiler struct{}
 
 func (acceptingCompiler) Compile(context.Context, domain.ProjectSnapshot) (domain.BuildVerification, error) {

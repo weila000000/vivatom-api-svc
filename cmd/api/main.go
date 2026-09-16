@@ -52,7 +52,15 @@ func main() {
 	teamService := team.NewService(identityService, sqlite.NewTeamRepository(database))
 	auditService := audit.NewService(identityService, sqlite.NewAuditRepository(database))
 	buildCompiler := compiler.NewClient(config.BuilderURL, config.BuilderToken, config.BuilderTimeout)
-	usageService := usage.NewService(identityService, orchestrator, sqlite.NewUsageRepository(database), buildCompiler)
+	usageRepository := sqlite.NewUsageRepository(database)
+	recovered, err := usageRepository.RecoverInterrupted(context.Background(), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if recovered > 0 {
+		logger.Warn("interrupted_agent_runs_recovered", "count", recovered)
+	}
+	usageService := usage.NewService(identityService, orchestrator, usageRepository, buildCompiler)
 	databaseReady := sqlite.ReadyCheck(database)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		Ready: func() error {

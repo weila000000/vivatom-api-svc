@@ -14,6 +14,14 @@ import (
 
 type UsageRepository struct{ db *sql.DB }
 
+type interruptedUsage struct {
+	id          string
+	workspaceID string
+	accountID   string
+	projectID   string
+	action      string
+}
+
 type creditQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
@@ -25,6 +33,57 @@ func workspaceCreditUsage(ctx context.Context, queryer creditQueryer, workspaceI
 }
 
 func NewUsageRepository(db *sql.DB) *UsageRepository { return &UsageRepository{db: db} }
+
+func (r *UsageRepository) RecoverInterrupted(ctx context.Context, completedAt string) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id,workspace_id,account_id,project_id,action FROM agent_usage WHERE status='running' ORDER BY created_at,id`)
+	if err != nil {
+		return 0, err
+	}
+	interrupted := make([]interruptedUsage, 0)
+	for rows.Next() {
+		var item interruptedUsage
+		if err = rows.Scan(&item.id, &item.workspaceID, &item.accountID, &item.projectID, &item.action); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		interrupted = append(interrupted, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err = rows.Close(); err != nil {
+		return 0, err
+	}
+	recovered := 0
+	for _, item := range interrupted {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE agent_usage SET status='failed',completed_at=? WHERE id=? AND status='running'`, completedAt, item.id)
+		if updateErr != nil {
+			return 0, updateErr
+		}
+		changed, updateErr := result.RowsAffected()
+		if updateErr != nil {
+			return 0, updateErr
+		}
+		if changed != 1 {
+			continue
+		}
+		metadata := map[string]any{"usageId": item.id, "action": item.action, "status": "failed", "resultCode": "server_restarted"}
+		if err = appendAudit(ctx, tx, item.workspaceID, item.accountID, "agent.completed", "project", item.projectID, completedAt, metadata); err != nil {
+			return 0, err
+		}
+		recovered++
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return recovered, nil
+}
 
 func (r *UsageRepository) StoreCandidate(ctx context.Context, workspaceID, accountID, projectID, usageID, prompt string, snapshot domain.ProjectSnapshot, createdAt string) (string, string, error) {
 	payload, err := json.Marshal(snapshot)
