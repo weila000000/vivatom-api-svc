@@ -19,11 +19,8 @@ func (e *ContractError) Error() string {
 }
 
 func ValidateBuildContract(plan BuildPlan, snapshot ProjectSnapshot) error {
-	if strings.TrimSpace(snapshot.Title) == "" {
-		return &ContractError{Code: "snapshot.title_missing"}
-	}
-	if strings.TrimSpace(snapshot.Summary) == "" {
-		return &ContractError{Code: "snapshot.summary_missing"}
+	if err := validateSnapshotMetadata(snapshot); err != nil {
+		return err
 	}
 	for _, planned := range plan.FilePlan {
 		if _, exists := snapshot.Files[planned.Path]; !exists {
@@ -37,8 +34,29 @@ func ValidateBuildContract(plan BuildPlan, snapshot ProjectSnapshot) error {
 }
 
 func ValidateRevisionContract(previous, candidate ProjectSnapshot) error {
+	if err := validateSnapshotMetadata(candidate); err != nil {
+		return err
+	}
 	if !reflect.DeepEqual(normalizeBackend(previous.Backend), normalizeBackend(candidate.Backend)) {
 		return &ContractError{Code: "snapshot.backend_changed_without_approval"}
+	}
+	return nil
+}
+
+func validateSnapshotMetadata(snapshot ProjectSnapshot) error {
+	titleLength := len([]rune(strings.TrimSpace(snapshot.Title)))
+	if titleLength == 0 {
+		return &ContractError{Code: "snapshot.title_missing"}
+	}
+	if titleLength > 200 {
+		return &ContractError{Code: "snapshot.title_too_long"}
+	}
+	summaryLength := len([]rune(strings.TrimSpace(snapshot.Summary)))
+	if summaryLength == 0 {
+		return &ContractError{Code: "snapshot.summary_missing"}
+	}
+	if summaryLength > 2000 {
+		return &ContractError{Code: "snapshot.summary_too_long"}
 	}
 	return nil
 }
